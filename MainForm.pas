@@ -27,6 +27,8 @@ type
     lbFileName: TLabel;
     btnFileSelect: TButton;
     FileOpenDialog: TFileOpenDialog;
+    tsTableInfo: TTabSheet;
+    memoInfo: TMemo;
     procedure FormCreate(Sender: TObject);
     procedure dgItemsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
       State: TGridDrawState);
@@ -315,8 +317,10 @@ end;
 procedure TFormMain.ShowTable(ATableName: string);
 var
   i: Integer;
+  RelItem: TRDB_RelationsItem;
   TmpField: TRDB_FieldInfoRec;
 begin
+  memoInfo.Clear();
   if ATableName = '' then
   begin
     tsGrid.Caption := 'Grid';
@@ -350,6 +354,65 @@ begin
         dgItems.ColWidths[i] := 40 }
       else
         dgItems.ColWidths[i] := 100;
+    end;
+
+    // table info
+    RelItem := nil;
+    for i := 0 to FReader.RelationsList.Count - 1 do
+    begin
+      RelItem := FReader.RelationsList.GetItem(i) as TRDB_RelationsItem;
+      if RelItem.RelationName = ATableName then
+        Break;
+      RelItem := nil;
+    end;
+    if Assigned(RelItem) then
+    begin
+      with memoInfo.Lines do
+      begin
+        Add(Format('== Table Rel=%d  Name=%s  Desc=%s', [RelItem.RelationID, RelItem.RelationName, RelItem.GetBlobValue(RelItem.Description)]));
+        Add(Format('RelationType=%d', [RelItem.RelationType]));
+        Add(Format('SystemFlag=%d', [RelItem.SystemFlag]));
+        Add(Format('Flags=%d', [RelItem.Flags]));
+        Add(Format('OwnerName=%s', [RelItem.OwnerName]));
+        Add(Format('Runtime=%s', [RelItem.Runtime]));
+        Add(Format('DefaultClass=%s', [RelItem.DefaultClass]));
+        Add(Format('ExternalFile=%s', [RelItem.ExternalFile]));
+        Add(Format('SecurityClass=%s', [RelItem.SecurityClass]));
+        Add(Format('FieldID=%d', [RelItem.FieldID]));
+        Add(Format('Format=%d', [RelItem.Format]));
+        Add(Format('DBKeyLen=%d', [RelItem.DBKeyLen]));
+        Add(Format('ViewBlr=%s', [RelItem.GetBlobValue(RelItem.ViewBlr)]));
+        Add(Format('ViewSource=%s', [RelItem.GetBlobValue(RelItem.ViewSource)]));
+        Add(Format('== Fields  Count=%d', [Length(RelItem._FieldsInfo)]));
+        for i := 0 to Length(RelItem._FieldsInfo) - 1 do
+        begin
+          TmpField := RelItem._FieldsInfo[i];
+          if RelItem._FieldsInfo[i].DType = 0 then
+          begin
+            Add(Format('%.2d FieldName=%s  Size=%d  Type=%s  Len=%d  SubType=%d',
+              [i,
+               RelItem._FieldsInfo[i].Name,
+               RelItem._FieldsInfo[i].Size,
+               RelItem._FieldsInfo[i].AsString,
+               RelItem._FieldsInfo[i].FieldLength,
+               RelItem._FieldsInfo[i].FieldSubType]));
+          end
+          else
+          begin
+            Add(Format('%.2d FieldName=%s  DType=%s  Len=%d  SubType=%d  Flags=%d  Offs=%d',
+              [i,
+               RelItem._FieldsInfo[i].Name,
+               RelItem._FieldsInfo[i].AsString,
+               RelItem._FieldsInfo[i].Length,
+               RelItem._FieldsInfo[i].SubType,
+               RelItem._FieldsInfo[i].Flags,
+               RelItem._FieldsInfo[i].Offset
+               ]));
+          end;
+        end;
+        if Assigned(RelItem._Format) then
+          Add(Format('== Format  Length=%d', [Length(RelItem._Format.Descriptor.Data)]));
+      end;
     end;
   end;
 

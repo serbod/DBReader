@@ -62,6 +62,7 @@ type
     function ReadVarChar(ACount: Integer; ASize: Integer = 0): string;
     function ReadChar(ACount: Integer): string;
     function IsNullValue(AIndex: Integer): Boolean;
+    function IsBlobValue(AIndex: Integer): Boolean;
   public
     TableInfo: TRDB_RelationsItem;
     Values: array of Variant;
@@ -293,6 +294,7 @@ type
     procedure DumpTable(ATableName, AFileName: string);
 
     property RelationsList: TRDB_RowsList read FRelationsList;       // (rel=6)
+    property OdsVersion: Integer read FOdsVersion;
 
     property OnLog: TGetStrProc read FOnLog write FOnLog;
   end;
@@ -819,7 +821,7 @@ begin
   TmpList := TRDB_RowsList.Create(TRDB_TableRowItem);
 
   ReadTable(ATableName, MaxInt, TmpList);
-  
+
   slText := TStringList.Create();
 
   // dump table info
@@ -924,6 +926,11 @@ var
   Rel: TRDB_RelationsItem;
   Field: TRDB_FieldsItem;
 begin
+  SortPagesList();
+  LogInfo('=== Sorted pages ===');
+  for i := 0 to FPagesList.Count - 1 do
+    LogInfo(Format('%s', [FPagesList.GetItem(i).GetAsText]));
+  
   for i := 0 to FRelationFieldsList.Count - 1 do
   begin
     RelField := FRelationFieldsList.GetItem(i) as TRDB_RelationFieldsItem;
@@ -1612,6 +1619,8 @@ procedure TDBReaderFB.ReadSystemTable(ARelationID, ARowID: Cardinal; AData: Ansi
 var
   TabItem: TRDB_RowItem;
   TableList: TRDB_RowsList;
+  TmpPageItem: TRDB_PagesItem;
+  iPageIndex: Integer;
 begin
   TableList := nil;
   case ARelationID of
@@ -1624,18 +1633,29 @@ begin
   if not Assigned(TableList) then Exit;
 
   TabItem := TableList.ItemClass.Create(Self, ARelationID, ARowID);
-  TableList.Add(TabItem);
   TabItem.ReadData(AData);
+  if ARelationID = 0 then
+  begin
+    TmpPageItem := TabItem as TRDB_PagesItem;
+    // add to pages list
+    iPageIndex := FindPageIndex(TmpPageItem.PageType, TmpPageItem.RelationID, TmpPageItem.PageSeq);
+    if iPageIndex < 0 then
+    begin
+      FPagesList.Insert(-iPageIndex-1, TmpPageItem);
+    end;
+  end
+  else
+    TableList.Add(TabItem);
   //LogInfo(TabItem.GetAsText());
 end;
 
 procedure TDBReaderFB.ReadTable(AName: string; ACount: Int64; AList: TRDB_RowsList);
 var
   RelItem: TRDB_RelationsItem;
-  //PageItem: TRDB_PagesItem;
+  TmpPageItem: TRDB_PagesItem;
   i, nPage, iOffs, iDataHeadLen, iDataOffs, iDataLen: Integer;
   nPos: Int64;
-  RelID: Integer;
+  RelID, iPageIndex: Integer;
   RawPage: TByteArray;
   PageHead: TFBPageHead;
   DataPageHead: TFBDataPageHead;
@@ -1726,6 +1746,18 @@ begin
         Move(RawPage, DataPageHead, SizeOf(DataPageHead));
         if DataPageHead.RelationID <> RelID then
           Continue;
+
+        // add to pages list
+        iPageIndex := FindPageIndex(PageHead.PageType, DataPageHead.RelationID, DataPageHead.Sequence);
+        if iPageIndex < 0 then
+        begin
+          TmpPageItem := TRDB_PagesItem.Create(Self, DataPageHead.RelationID, 0);
+          TmpPageItem.PageType := PageHead.PageType;
+          TmpPageItem.PageNum := nPage;
+          TmpPageItem.RelationID := DataPageHead.RelationID;
+          TmpPageItem.PageSeq := DataPageHead.Sequence;
+          FPagesList.Insert(-iPageIndex-1, TmpPageItem);
+        end;
 
         if DataPageHead.Count > 0 then
         begin
@@ -1912,8 +1944,20 @@ begin
     else
     if VarIsFloat(Values[AFieldIndex]) then
     begin
+      // float point in short form
       d := Values[AFieldIndex];
       Result := Format('%.6g', [d]);
+    end
+    else
+    if VarIsOrdinal(Values[AFieldIndex]) and IsBlobValue(AFieldIndex) then
+    begin
+      // read blob
+      try
+        Result := Reader.GetBlobData(RelID, Values[AFieldIndex]);
+      except on E: Exception do
+        Result := E.Message;
+      end;
+      //Values[AFieldIndex] := Result;
     end
     else
     if VarIsStr(Values[AFieldIndex]) then
@@ -1945,6 +1989,19 @@ begin
         Exit;
       end;
     end;
+  end;
+end;
+
+function TRDB_RowItem.IsBlobValue(AIndex: Integer): Boolean;
+begin
+  Result := False;
+  if Assigned(TableInfo) and (AIndex <= High(TableInfo._FieldsInfo)) then
+  begin
+    if (TableInfo._FieldsInfo[AIndex].DType = DTYPE_BLOB)
+    or ((TableInfo._FieldsInfo[AIndex].DType = DTYPE_TEXT) and (TableInfo._FieldsInfo[AIndex].SubType = 1))
+    or (TableInfo._FieldsInfo[AIndex].FieldType = 261)
+    then
+      Result := True;
   end;
 end;
 
@@ -2007,7 +2064,7 @@ begin
 
     if Reader.IsLogBlobs and ((rec.RelationID <> 0) or (rec.RowID <> 0)) then
     begin
-      Reader.LogInfo( Format('RelID=%d RowID=%d : type=%d rel=%d rec=%d raw(%d)=%s dump(%d)=%s data=%s',
+      Reader.LogInfo( Format('BLOB_FIELD RelID=%d RowID=%d : type=%d rel=%d rec=%d raw(%d)=%s dump(%d)=%s data=%s',
         [RelID, RowID,
         AType, rec.RelationID, rec.RowID,
         nPos, BufferToHex(FRawData[nPos], SizeOf(rec)),
@@ -2213,8 +2270,8 @@ end;
 
 function TRDB_PagesItem.GetAsText: string;
 begin
-  Result := Format('PageNum=%d RelID=%d Seq=%d Type=%d',
-                  [PageNum, RelationID, PageSeq, PageType]);
+  Result := Format('PageNum=%d Type=%d RelID=%d Seq=%d',
+                  [PageNum, PageType, RelationID, PageSeq]);
 end;
 
 procedure TRDB_PagesItem.ReadData(const AData: AnsiString);
@@ -2353,7 +2410,7 @@ end;
 
 function TRDB_FormatsItem.FillFieldInfo(var AFieldInfo: TRDB_FieldInfoRec; AFieldIndex: Integer): Boolean;
 var
-  iPos: Integer;
+  nPre, iPos: Integer;
   FormatRec: TFBFormatRec;
   sData: AnsiString;
 begin
@@ -2364,8 +2421,15 @@ begin
     SubType: Word;  (codepage for CHAR)
     Flags: Word;
     Address: DWORD_PTR; }
-  
-  iPos := 2 + (AFieldIndex * SizeOf(FormatRec));
+
+  nPre := 2;
+  if Reader.OdsVersion = 11 then
+    nPre := 2
+  else
+  if Reader.OdsVersion = 12 then
+    nPre := 4;
+
+  iPos := nPre + (AFieldIndex * SizeOf(FormatRec));
   sData := GetBlobValue(Descriptor);
   if iPos + SizeOf(FormatRec) > Length(sData) then
     Exit;

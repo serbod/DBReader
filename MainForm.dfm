@@ -73,7 +73,7 @@ object FormMain: TFormMain
     Top = 0
     Width = 603
     Height = 474
-    ActivePage = tsGrid
+    ActivePage = tsTableInfo
     Align = alClient
     TabOrder = 1
     object tsLog: TTabSheet
@@ -116,6 +116,31 @@ object FormMain: TFormMain
         OnDblClick = dgItemsDblClick
         OnDrawCell = dgItemsDrawCell
         OnSelectCell = dgItemsSelectCell
+      end
+    end
+    object tsTableInfo: TTabSheet
+      Caption = 'Table Info'
+      ImageIndex = 2
+      object memoInfo: TMemo
+        AlignWithMargins = True
+        Left = 4
+        Top = 4
+        Width = 587
+        Height = 435
+        Margins.Left = 4
+        Margins.Top = 4
+        Margins.Right = 4
+        Margins.Bottom = 4
+        Align = alClient
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = clWindowText
+        Font.Height = -13
+        Font.Name = 'Courier New'
+        Font.Style = []
+        ParentFont = False
+        ScrollBars = ssBoth
+        TabOrder = 0
+        WordWrap = False
       end
     end
   end
