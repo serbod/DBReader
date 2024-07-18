@@ -24,7 +24,7 @@ type
     RawOffs: Integer;      // value offset (0-based)
     RawLen: Integer;       // value length
     FieldName: string;
-    FieldType: string;
+    FieldTypeName: string;
 
     procedure UpdateView();
 
@@ -86,7 +86,7 @@ var
   NewOffs, NewLen: Integer;
   s: string;
 begin
-  lbType.Caption := FieldType;
+  lbType.Caption := FieldTypeName;
   lbSize.Caption := IntToStr(RawLen);
   s := '';
   NewOffs := RawOffs+1;

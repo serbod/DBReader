@@ -1,7 +1,7 @@
-unit FBReaderUnit;
+unit DBReaderFirebird;
 
 (*
-FireBird database file reader
+Interbase/FireBird (GDB, FDB) database file reader
 
 Author: Sergey Bodrov, 2024
 License: MIT
@@ -15,7 +15,7 @@ https://www.ibexpert.net/ibe/pmwiki.php?n=Doc.StructureOfADataPage
 interface
 
 uses
-  Windows, SysUtils, Classes, Variants;
+  Windows, SysUtils, Classes, Variants, DBReaderBase, DB;
 
 type
   TDBReaderFB = class;
@@ -45,9 +45,8 @@ type
     Data: AnsiString;
   end;
 
-  TRDB_RowItem = class(TObject)
+  TRDB_RowItem = class(TDbRowItem)
   protected
-    FRawData: AnsiString;
     FDataPos: Integer;
 
     FReader: TDBReaderFB;
@@ -65,25 +64,22 @@ type
     function IsBlobValue(AIndex: Integer): Boolean;
   public
     TableInfo: TRDB_RelationsItem;
-    Values: array of Variant;
-    constructor Create(AReader: TDBReaderFB; ARelID: Integer; ARowID: Cardinal);
+    constructor Create(AOwner: TDbRowsList; AReader: TDBReaderFB; ARelID: Integer; ARowID: Cardinal); reintroduce;
     procedure ReadRawData(const AData; ALen: Integer);
     procedure ReadData(const AData: AnsiString); virtual;
     function GetAsText(): string; virtual;
     function GetBlobValue(var AValue: TRDB_Blob): AnsiString;
-    function GetFieldAsStr(AFieldIndex: Integer): string; virtual;
+    function GetFieldAsStr(AFieldIndex: Integer): string; override;
     function GetValueByName(AName: string): Variant; virtual;
 
     property Reader: TDBReaderFB read FReader;
     property RelID: Integer read FRelID;
     property RowID: Cardinal read FRowID;
-    property RawData: AnsiString read FRawData;
   end;
   TRDB_RowClass = class of TRDB_RowItem;
 
-  TRDB_RowsList = class(TList)
+  TRDB_RowsList = class(TDbRowsList)
   protected
-    procedure Notify(Ptr: Pointer; Action: TListNotification); override;
     // set FieldsInfo[AIndex] properties for system tables
     procedure SetFieldInfo(var AIndex: Integer; var AOffs: Cardinal; AName: string; AType, ALen, ASub: Word);
     // fill FieldsInfo for system table by ARelID
@@ -91,10 +87,9 @@ type
     // ODS 11 (FB 2.1)
     procedure FillSysTableInfo_11(ARelID: Integer);
   public
-    ItemClass: TRDB_RowClass;
     FieldsInfo: array of TRDB_FieldInfoRec;
-    TableName: string;
     RelationID: Integer;
+    ItemClass: TRDB_RowClass;
     function GetItem(AIndex: Integer): TRDB_RowItem;
     constructor Create(AItemClass: TRDB_RowClass); reintroduce;
   end;
@@ -234,10 +229,8 @@ type
 
 
 
-  TDBReaderFB = class(TComponent)
+  TDBReaderFB = class(TDBReader)
   private
-    FFile: TFileStream;
-
     FPageSize: Integer;
     FOdsVersion: Integer;
     FMaxRecPerPage: Word;              // for calculation of Seq/Rec from RecID
@@ -254,8 +247,6 @@ type
     FRelationFieldsList: TRDB_RowsList;  // (rel=5)
     FRelationsList: TRDB_RowsList;       // (rel=6)
     FFormatsList: TRDB_RowsList;         // (rel=8)
-
-    FOnLog: TGetStrProc;
 
     function GetRelationName(ARelID: Integer): string;
     function GetFieldSizeByTypeLen(AType, ALen, ASubType: Word): Integer;
@@ -282,16 +273,17 @@ type
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
 
-    procedure LogInfo(AStr: string);
-    function OpenFile(AFileName: string): Boolean;
+    function OpenFile(AFileName: string): Boolean; override;
 
     // Read table data from DB to AList
     // AName - table name
     // ACount - how many items read
-    procedure ReadTable(AName: string; ACount: Int64 = MaxInt; AList: TRDB_RowsList = nil);
+    procedure ReadTable(AName: string; ACount: Int64 = MaxInt; AList: TDbRowsList = nil); override;
 
     procedure DumpSystemTables(AFileName: string);
     procedure DumpTable(ATableName, AFileName: string);
+    // get detailed multi-line description of table
+    function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; override;
 
     property RelationsList: TRDB_RowsList read FRelationsList;       // (rel=6)
     property OdsVersion: Integer read FOdsVersion;
@@ -491,6 +483,32 @@ begin
     end
   else
     Result := '#'+IntToStr(AType);
+  end;
+end;
+
+function FieldTypeToDbFieldType(AType, ALen, ASubType: Word): TFieldType;
+begin
+  case AType of
+    7: Result := ftSmallint;
+    8: Result := ftInteger;
+    //8: Values[i] := ReadInt64(); // INTEGER
+    10: Result := ftFloat;
+    14: Result := ftString;
+    27: Result := ftLargeint;
+    35: Result := ftDateTime;
+    37: Result := ftString;
+    261: // BLOB
+    begin
+      case ASubType of
+        0: Result := ftBytes;
+        1: Result := ftString;
+        2: Result := ftString;
+      else
+        Result := ftBytes;
+      end;
+    end
+  else
+    Result := ftUnknown;
   end;
 end;
 
@@ -705,7 +723,6 @@ begin
   FreeAndNil(FRelationFieldsList);
   FreeAndNil(FFieldsList);
   FreeAndNil(FPagesList);
-  FreeAndNil(FFile);
   inherited;
 end;
 
@@ -1306,9 +1323,74 @@ begin
   Result := '';
 end;
 
-procedure TDBReaderFB.LogInfo(AStr: string);
+function TDBReaderFB.FillTableInfoText(ATableName: string; ALines: TStrings): Boolean;
+var
+  i: Integer;
+  RelItem: TRDB_RelationsItem;
+  TmpField: TRDB_FieldInfoRec;
 begin
-  if Assigned(OnLog) then OnLog(AStr);
+  Result := False;
+  if not Assigned(ALines) then Exit;
+  
+  // table info
+  RelItem := nil;
+  for i := 0 to RelationsList.Count - 1 do
+  begin
+    RelItem := RelationsList.GetItem(i) as TRDB_RelationsItem;
+    if RelItem.RelationName = ATableName then
+      Break;
+    RelItem := nil;
+  end;
+  if Assigned(RelItem) then
+  begin
+    with ALines do
+    begin
+      Add(Format('== Table Rel=%d  Name=%s  Desc=%s', [RelItem.RelationID, RelItem.RelationName, RelItem.GetBlobValue(RelItem.Description)]));
+      Add(Format('RelationType=%d', [RelItem.RelationType]));
+      Add(Format('SystemFlag=%d', [RelItem.SystemFlag]));
+      Add(Format('Flags=%d', [RelItem.Flags]));
+      Add(Format('OwnerName=%s', [RelItem.OwnerName]));
+      Add(Format('Runtime=%s', [RelItem.Runtime]));
+      Add(Format('DefaultClass=%s', [RelItem.DefaultClass]));
+      Add(Format('ExternalFile=%s', [RelItem.ExternalFile]));
+      Add(Format('SecurityClass=%s', [RelItem.SecurityClass]));
+      Add(Format('FieldID=%d', [RelItem.FieldID]));
+      Add(Format('Format=%d', [RelItem.Format]));
+      Add(Format('DBKeyLen=%d', [RelItem.DBKeyLen]));
+      Add(Format('ViewBlr=%s', [RelItem.GetBlobValue(RelItem.ViewBlr)]));
+      Add(Format('ViewSource=%s', [RelItem.GetBlobValue(RelItem.ViewSource)]));
+      Add(Format('== Fields  Count=%d', [Length(RelItem._FieldsInfo)]));
+      for i := 0 to Length(RelItem._FieldsInfo) - 1 do
+      begin
+        TmpField := RelItem._FieldsInfo[i];
+        if RelItem._FieldsInfo[i].DType = 0 then
+        begin
+          Add(Format('%.2d FieldName=%s  Size=%d  Type=%s  Len=%d  SubType=%d',
+            [i,
+             RelItem._FieldsInfo[i].Name,
+             RelItem._FieldsInfo[i].Size,
+             RelItem._FieldsInfo[i].AsString,
+             RelItem._FieldsInfo[i].FieldLength,
+             RelItem._FieldsInfo[i].FieldSubType]));
+        end
+        else
+        begin
+          Add(Format('%.2d FieldName=%s  DType=%s  Len=%d  SubType=%d  Flags=%d  Offs=%d',
+            [i,
+             RelItem._FieldsInfo[i].Name,
+             RelItem._FieldsInfo[i].AsString,
+             RelItem._FieldsInfo[i].Length,
+             RelItem._FieldsInfo[i].SubType,
+             RelItem._FieldsInfo[i].Flags,
+             RelItem._FieldsInfo[i].Offset
+             ]));
+        end;
+      end;
+      if Assigned(RelItem._Format) then
+        Add(Format('== Format  Length=%d', [Length(RelItem._Format.Descriptor.Data)]));
+    end;
+    Result := True;
+  end;
 end;
 
 function TDBReaderFB.OpenFile(AFileName: string): Boolean;
@@ -1331,9 +1413,8 @@ var
   TmpPageItem: TRDB_PagesItem;
   BlobRecHead: TFBBlobRecHead;
 begin
-  Result := False;
-  if not FileExists(AFileName) then Exit;
-  FFile := TFileStream.Create(AFileName, fmOpenRead + fmShareDenyNone);
+  Result := inherited OpenFile(AFileName);
+  if not Result then Exit;
 
   // read header page
   FFile.Read(OdsHeader, SizeOf(OdsHeader));
@@ -1395,7 +1476,7 @@ begin
         iPageIndex := FindPageIndex(PageHead.PageType, DataPageHead.RelationID, DataPageHead.Sequence);
         if iPageIndex < 0 then
         begin
-          TmpPageItem := TRDB_PagesItem.Create(Self, DataPageHead.RelationID, 0);
+          TmpPageItem := TRDB_PagesItem.Create(FPagesList, Self, DataPageHead.RelationID, 0);
           TmpPageItem.PageType := PageHead.PageType;
           TmpPageItem.PageNum := nPage;
           TmpPageItem.RelationID := DataPageHead.RelationID;
@@ -1632,7 +1713,7 @@ begin
   end;
   if not Assigned(TableList) then Exit;
 
-  TabItem := TableList.ItemClass.Create(Self, ARelationID, ARowID);
+  TabItem := TableList.ItemClass.Create(TableList, Self, ARelationID, ARowID);
   TabItem.ReadData(AData);
   if ARelationID = 0 then
   begin
@@ -1649,9 +1730,10 @@ begin
   //LogInfo(TabItem.GetAsText());
 end;
 
-procedure TDBReaderFB.ReadTable(AName: string; ACount: Int64; AList: TRDB_RowsList);
+procedure TDBReaderFB.ReadTable(AName: string; ACount: Int64; AList: TDbRowsList);
 var
   RelItem: TRDB_RelationsItem;
+  RowList: TRDB_RowsList;
   TmpPageItem: TRDB_PagesItem;
   i, nPage, iOffs, iDataHeadLen, iDataOffs, iDataLen: Integer;
   nPos: Int64;
@@ -1684,11 +1766,19 @@ begin
   // Show table info
   LogInfo(Format('== TableName=%s  RelationID=%d', [RelItem.RelationName, RelItem.RelationID]));
   AList.TableName := RelItem.RelationName;
-  AList.RelationID := RelItem.RelationID;
-  SetLength(AList.FieldsInfo, Length(RelItem._FieldsInfo));
+  //AList.RelationID := RelItem.RelationID;
+  SetLength(AList.FieldsDef, Length(RelItem._FieldsInfo));
+  if (AList is TRDB_RowsList) then
+    SetLength((AList as TRDB_RowsList).FieldsInfo, Length(RelItem._FieldsInfo));
   for i := Low(RelItem._FieldsInfo) to High(RelItem._FieldsInfo) do
   begin
-    AList.FieldsInfo[i] := RelItem._FieldsInfo[i];
+    if (AList is TRDB_RowsList) then
+      (AList as TRDB_RowsList).FieldsInfo[i] := RelItem._FieldsInfo[i];
+    AList.FieldsDef[i].Name := RelItem._FieldsInfo[i].Name;
+    AList.FieldsDef[i].TypeName :=  RelItem._FieldsInfo[i].AsString;
+    AList.FieldsDef[i].FieldType := FieldTypeToDbFieldType(RelItem._FieldsInfo[i].FieldType, 0, RelItem._FieldsInfo[i].FieldSubType);
+    AList.FieldsDef[i].Size := RelItem._FieldsInfo[i].Size;
+    AList.FieldsDef[i].RawOffset := RelItem._FieldsInfo[i].Offset;
     {LogInfo(Format('%.2d FieldName=%s  Size=%d  Type=%s  Len=%d  SubType=%d',
       [i,
        RelItem._FieldsInfo[i].Name,
@@ -1698,24 +1788,29 @@ begin
        RelItem._FieldsInfo[i].FieldSubType]));  }
   end;
   //LogInfo('==');
-  // fill rel info form list info, if not filled
-  if FOdsVersion = 11 then
-    AList.FillSysTableInfo_11(AList.RelationID)
-  else
-    AList.FillSysTableInfo(AList.RelationID);
-  Assert(High(RelItem._FieldsInfo) = High(AList.FieldsInfo), ' List and item FieldsInfo not same length!');
-  for i := Low(AList.FieldsInfo) to High(AList.FieldsInfo) do
+
+  if (AList is TRDB_RowsList) then
   begin
-    if RelItem._FieldsInfo[i].DType = 0 then
+    RowList := (AList as TRDB_RowsList);
+    // fill rel info form list info, if not filled
+    if FOdsVersion = 11 then
+      RowList.FillSysTableInfo_11(RelID)
+    else
+      RowList.FillSysTableInfo(RelID);
+    Assert(High(RelItem._FieldsInfo) = High(RowList.FieldsInfo), ' List and item FieldsInfo not same length!');
+    for i := Low(RowList.FieldsInfo) to High(RowList.FieldsInfo) do
     begin
-      RelItem._FieldsInfo[i].DType := AList.FieldsInfo[i].DType;
-      RelItem._FieldsInfo[i].Length := AList.FieldsInfo[i].Length;
-      RelItem._FieldsInfo[i].Scale := AList.FieldsInfo[i].Scale;
-      RelItem._FieldsInfo[i].SubType := AList.FieldsInfo[i].SubType;
-      RelItem._FieldsInfo[i].Offset := AList.FieldsInfo[i].Offset;
+      if RelItem._FieldsInfo[i].DType = 0 then
+      begin
+        RelItem._FieldsInfo[i].DType := RowList.FieldsInfo[i].DType;
+        RelItem._FieldsInfo[i].Length := RowList.FieldsInfo[i].Length;
+        RelItem._FieldsInfo[i].Scale := RowList.FieldsInfo[i].Scale;
+        RelItem._FieldsInfo[i].SubType := RowList.FieldsInfo[i].SubType;
+        RelItem._FieldsInfo[i].Offset := RowList.FieldsInfo[i].Offset;
+      end;
     end;
   end;
-  
+
   if ACount = 0 then
     Exit;
   // find pages for RelID
@@ -1751,7 +1846,7 @@ begin
         iPageIndex := FindPageIndex(PageHead.PageType, DataPageHead.RelationID, DataPageHead.Sequence);
         if iPageIndex < 0 then
         begin
-          TmpPageItem := TRDB_PagesItem.Create(Self, DataPageHead.RelationID, 0);
+          TmpPageItem := TRDB_PagesItem.Create(FPagesList, Self, DataPageHead.RelationID, 0);
           TmpPageItem.PageType := PageHead.PageType;
           TmpPageItem.PageNum := nPage;
           TmpPageItem.RelationID := DataPageHead.RelationID;
@@ -1780,7 +1875,7 @@ begin
             begin
               SetLength(s, iDataLen);
               Move(RawPage[iDataOffs], s[1], iDataLen);
-              TableRowItem := TRDB_TableRowItem.Create(Self, DataPageHead.RelationID, (DataPageHead.Sequence * FMaxRecPerPage) + Cardinal(i));
+              TableRowItem := TRDB_TableRowItem.Create(AList, Self, DataPageHead.RelationID, (DataPageHead.Sequence * FMaxRecPerPage) + Cardinal(i));
               TableRowItem.TableInfo := RelItem;
               //TableRowItem._RowID := (DataPageHead.Sequence * FMaxRecPerPage) + i;
               //TableRowItem.ReadRawData(RawPage[DataPageRecs[i].Offset], DataPageRecs[i].Length);
@@ -1840,7 +1935,7 @@ begin
               s := s + GetFragmentData(DataFragRecHead.f_page, DataFragRecHead.f_line);
 
               // read data to item
-              TableRowItem := TRDB_TableRowItem.Create(Self, DataPageHead.RelationID, (DataPageHead.Sequence * FMaxRecPerPage) + Cardinal(i));
+              TableRowItem := TRDB_TableRowItem.Create(AList, Self, DataPageHead.RelationID, (DataPageHead.Sequence * FMaxRecPerPage) + Cardinal(i));
               TableRowItem.TableInfo := RelItem;
               TableRowItem.ReadData(s);
               if Assigned(AList) then
@@ -1913,9 +2008,9 @@ end;
 
 { TRDB_TableItem }
 
-constructor TRDB_RowItem.Create(AReader: TDBReaderFB; ARelID: Integer; ARowID: Cardinal);
+constructor TRDB_RowItem.Create(AOwner: TDbRowsList; AReader: TDBReaderFB; ARelID: Integer; ARowID: Cardinal);
 begin
-  inherited Create();
+  inherited Create(AOwner);
   FReader := AReader;
   FRelID := ARelID;
   FRowID := ARowID;
@@ -2012,8 +2107,8 @@ begin
   Result := False;
   FlagIndex := AIndex div 8;
   FlagOffs := AIndex mod 8;
-  if FlagIndex < Length(FRawData) then
-    Result := (Ord(FRawData[FlagIndex+1]) and (Byte(1) shl FlagOffs)) <> 0;
+  if FlagIndex < Length(RawData) then
+    Result := (Ord(RawData[FlagIndex+1]) and (Byte(1) shl FlagOffs)) <> 0;
 end;
 
 // Type 0 = 8 bytes
@@ -2052,9 +2147,9 @@ begin
   FillChar(rec, SizeOf(rec), 0);
   if AType in [0, 1, 5, 6, 8] then
   begin
-    if nPos-1 + SizeOf(rec) <= Length(FRawData) then
+    if nPos-1 + SizeOf(rec) <= Length(RawData) then
     begin
-      Move(FRawData[nPos], rec, SizeOf(rec));
+      Move(RawData[nPos], rec, SizeOf(rec));
       //Result := Format('%d:%d', [rec.RelationID, rec.RecID]);
       Result.RelID := rec.RelationID;
       Result.RowID := rec.RowID;
@@ -2067,18 +2162,18 @@ begin
       Reader.LogInfo( Format('BLOB_FIELD RelID=%d RowID=%d : type=%d rel=%d rec=%d raw(%d)=%s dump(%d)=%s data=%s',
         [RelID, RowID,
         AType, rec.RelationID, rec.RowID,
-        nPos, BufferToHex(FRawData[nPos], SizeOf(rec)),
-        FDataPos, BufferToHex(FRawData[FDataPos], nMaxLen),
+        nPos, BufferToHex(RawData[nPos], SizeOf(rec)),
+        FDataPos, BufferToHex(RawData[FDataPos], nMaxLen),
         Result.Data]) );
     end;
   end
   else
   if AType = 2 then
   begin
-    if FDataPos-1 + SizeOf(rec) <= Length(FRawData) then
+    if FDataPos-1 + SizeOf(rec) <= Length(RawData) then
     begin
-      Move(FRawData[FDataPos], wRow, SizeOf(wRow));
-      Move(FRawData[FDataPos+2], wRel, SizeOf(wRel));
+      Move(RawData[FDataPos], wRow, SizeOf(wRow));
+      Move(RawData[FDataPos+2], wRel, SizeOf(wRel));
       rec.RowID := wRow;
       rec.RelationID := wRel;
       //Result := Format(':%d', [rec.RecID]);
@@ -2093,12 +2188,12 @@ begin
       begin
         Result.RowID := rec.RowID;
         //Result.Data := Reader.GetBlobData(RelID, rec.RowID);
-        Result.Data := Format('BLOB_BLR row=%d rel=%d %s', [rec.RowID, rec.RelationID, BufferToHex(FRawData[FDataPos], 4)]);
+        Result.Data := Format('BLOB_BLR row=%d rel=%d %s', [rec.RowID, rec.RelationID, BufferToHex(RawData[FDataPos], 4)]);
       end;
     end;
   end
   else
-    Result.Data := BufferToHex(FRawData[FDataPos], nMaxLen);
+    Result.Data := BufferToHex(RawData[FDataPos], nMaxLen);
 
   Inc(FDataPos, nMaxLen);
 end;
@@ -2110,14 +2205,14 @@ begin
   Result := '';
 
   nPos := FDataPos;
-  while ((nPos - FDataPos) < ACount) and (nPos <= Length(FRawData)) do
+  while ((nPos - FDataPos) < ACount) and (nPos <= Length(RawData)) do
   begin
-    if FRawData[nPos] = #0 then
+    if RawData[nPos] = #0 then
       Break;
     Inc(nPos);
   end;
   if nPos > FDataPos then
-    Result := Trim(Copy(FRawData, FDataPos, nPos-FDataPos));
+    Result := Trim(Copy(RawData, FDataPos, nPos-FDataPos));
 
   Inc(FDataPos, ACount);
 end;
@@ -2126,7 +2221,7 @@ procedure TRDB_RowItem.ReadData(const AData: AnsiString);
 begin
   // decompress ?
   // read header ?
-  FRawData := AData;
+  RawData := AData;
   FDataPos := 5;
 end;
 
@@ -2147,18 +2242,18 @@ begin
   if AType < 2 then
   begin
     // days from epoch begining
-    Move(FRawData[nPos], Days, 4);
+    Move(RawData[nPos], Days, 4);
     if Days = 0 then
       Result := 0
     else
       Result := Days - FB_EPOCH_DIFF;
     if AType = 0 then
-      Move(FRawData[nPos+4], Part, 4);
+      Move(RawData[nPos+4], Part, 4);
   end
   else
   begin
     // part of day
-    Move(FRawData[nPos], Part, 4);
+    Move(RawData[nPos], Part, 4);
   end;
   // part of day
   Result := Result + (1 / (24*60*60*10000) * Part);
@@ -2186,15 +2281,15 @@ function TRDB_RowItem.ReadFloat(ABytes: Integer): Double;
 var
   fSingle: Single;
 begin
-  if (FDataPos+ABytes) <= Length(FRawData) then
+  if (FDataPos+ABytes) <= Length(RawData) then
   begin
     if ABytes = 4 then
     begin
-      Move(FRawData[FDataPos], fSingle, SizeOf(fSingle));
+      Move(RawData[FDataPos], fSingle, SizeOf(fSingle));
       Result := fSingle;
     end
     else
-      Move(FRawData[FDataPos], Result, SizeOf(Result))
+      Move(RawData[FDataPos], Result, SizeOf(Result))
   end
   else
     Result := 0;
@@ -2204,16 +2299,16 @@ end;
 function TRDB_RowItem.ReadInt(ABytes: Integer): Integer;
 begin
   Result := 0;
-  if (ABytes > 0) and (Length(FRawData) >= (FDataPos + ABytes)) then
-    Move(FRawData[FDataPos], Result, ABytes);
+  if (ABytes > 0) and (Length(RawData) >= (FDataPos + ABytes)) then
+    Move(RawData[FDataPos], Result, ABytes);
   Inc(FDataPos, ABytes);
 end;
 
 function TRDB_RowItem.ReadInt64(ABytes: Integer): Int64;
 begin
   Result := 0;
-  if (ABytes > 0) and (Length(FRawData) >= (FDataPos + ABytes)) then
-    Move(FRawData[FDataPos], Result, 8);
+  if (ABytes > 0) and (Length(RawData) >= (FDataPos + ABytes)) then
+    Move(RawData[FDataPos], Result, 8);
   Inc(FDataPos, ABytes);
 end;
 
@@ -2255,13 +2350,13 @@ begin
 
   nPos := FDataPos;
   // read length SMALLINT
-  Move(FRawData[nPos], nLen, SizeOf(nLen));
+  Move(RawData[nPos], nLen, SizeOf(nLen));
   Inc(nPos, SizeOf(nLen));
   if nLen > ACount then
     nLen := ACount;
 
-  if (nPos + nLen <= Length(FRawData)) then
-    Result := Copy(FRawData, nPos, nLen);
+  if (nPos + nLen <= Length(RawData)) then
+    Result := Copy(RawData, nPos, nLen);
 
   Inc(FDataPos, ASize);
 end;
@@ -2282,7 +2377,7 @@ begin
   PageSeq := ReadInt(4);             // INTEGER
   PageType := ReadInt(2);            // SMALLINT
 
-  FRawData := '';
+  RawData := '';
 end;
 
 { TRDB_FieldsItem }
@@ -2326,7 +2421,7 @@ begin
   CharacterSetID := ReadInt(2);    // SMALLINT
   FieldPrecision := ReadInt(2);    // SMALLINT
 
-  FRawData := '';
+  RawData := '';
 end;
 
 { TRDB_RelationFieldsItem }
@@ -2361,7 +2456,7 @@ begin
   DefaultSource := ReadBlob(1);    // BLOB SUB_TYPE TEXT
   CollationID := ReadInt(2);       // SMALLINT
 
-  FRawData := '';
+  RawData := '';
 end;
 
 { TRDB_RelationsItem }
@@ -2403,7 +2498,7 @@ begin
 
   {Reader.LogInfo( SysUtils.Format('RelationID=%d FieldID=%d RelationName=%s OwnerName=%s',
      [RelationID, FieldID, RelationName, OwnerName]) ); }
-  FRawData := '';
+  RawData := '';
 end;
 
 { TRDB_FormatsItem }
@@ -2478,7 +2573,7 @@ begin
   Format := ReadInt(2);           // SMALLINT
   Descriptor := ReadBlob(6);      // BLOB SUB_TYPE 6
 
-  FRawData := '';
+  RawData := '';
 end;
 
 { TRDB_TableList }
@@ -2613,13 +2708,6 @@ end;
 function TRDB_RowsList.GetItem(AIndex: Integer): TRDB_RowItem;
 begin
   Result := TRDB_RowItem(Get(AIndex));
-end;
-
-procedure TRDB_RowsList.Notify(Ptr: Pointer; Action: TListNotification);
-begin
-  inherited;
-  if Action = lnDeleted then
-    TRDB_RowItem(Ptr).Free;
 end;
 
 procedure TRDB_RowsList.SetFieldInfo(var AIndex: Integer; var AOffs: Cardinal; AName: string; AType, ALen, ASub: Word);
@@ -2765,7 +2853,7 @@ begin
   // leave only null flags at beginning of row
   //SetLength(FRawData, ((Length(TableInfo._FieldsInfo]) div 32) + 1) * 4);
   if Reader.IsClearRawData then
-    FRawData := '';
+    RawData := '';
 end;
 
 { TFBTable }

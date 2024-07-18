@@ -78,6 +78,10 @@ object FormMain: TFormMain
     TabOrder = 1
     object tsLog: TTabSheet
       Caption = 'Log'
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object memoLog: TMemo
         AlignWithMargins = True
         Left = 4
@@ -105,6 +109,10 @@ object FormMain: TFormMain
     object tsGrid: TTabSheet
       Caption = 'Grid'
       ImageIndex = 1
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object dgItems: TDrawGrid
         Left = 0
         Top = 0
