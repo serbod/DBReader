@@ -5,7 +5,7 @@ interface
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB,
-  DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas;
+  DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox;
 
 type
   TMyTreeNode = class(TTreeNode)
@@ -53,8 +53,10 @@ type
     procedure OpenFB(AFileName: string);
     procedure OpenBDB(AFileName: string);
     procedure OpenCDS(AFileName: string);
+    procedure OpenParadox(AFileName: string);
   public
     { Public declarations }
+    MaxRows: Integer;
     procedure OpenDB(AFileName: string);
     procedure Test();
   end;
@@ -270,6 +272,7 @@ procedure TFormMain.FormCreate(Sender: TObject);
 begin
   memoLog.Clear();
   FRowsList := TRDB_RowsList.Create(TRDB_TableRowItem);
+  MaxRows := MaxInt;
   //Test();
   if ParamCount > 0 then
     OpenDB(ParamStr(1));
@@ -337,7 +340,10 @@ begin
     OpenFB(FDbFileName)
   else
   if (sExt = '.cds') then
-    OpenCDS(FDbFileName);
+    OpenCDS(FDbFileName)
+  else
+  if (sExt = '.db') then
+    OpenParadox(FDbFileName);
   memoLog.Lines.EndUpdate();
 end;
 
@@ -353,6 +359,15 @@ begin
   //FReader.DumpSystemTables('sys_tables.txt');
 
   FillTree();
+end;
+
+procedure TFormMain.OpenParadox(AFileName: string);
+begin
+  FReader := TDBReaderParadox.Create(Self);
+  FReader.OnLog := OnLogHandler;
+  FReader.OpenFile(AFileName);
+
+  ShowTable((FReader as TDBReaderParadox).TableName);
 end;
 
 procedure TFormMain.ShowTable(ATableName: string);
@@ -374,7 +389,7 @@ begin
     if FRowsList.TableName <> ATableName then
     begin
       FRowsList.Clear();
-      FReader.ReadTable(ATableName, MaxInt, FRowsList);
+      FReader.ReadTable(ATableName, MaxRows, FRowsList);
     end;
 
     // prepare grid (table)

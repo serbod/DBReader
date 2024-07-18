@@ -3,7 +3,7 @@ unit DBReaderMidas;
 (*
 Midas (TClientDataSet, CDS) database file reader
 
-Author: Sergey Bodrov, 2024
+Author: Sergey Bodrov, 2024 Minsk
 License: MIT
 
 https://alexeevd.narod.ru/papers/cds_format.htm
