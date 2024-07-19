@@ -3,7 +3,7 @@ unit DBReaderBase;
 (*
 Database file reader base classes and defines
 
-Author: Sergey Bodrov, 2024
+Author: Sergey Bodrov, 2024 Minsk
 License: MIT
 
 *)
@@ -149,8 +149,25 @@ begin
 end;
 
 function TDbRowItem.GetFieldAsStr(AFieldIndex: Integer): string;
+var
+  dt: TDateTime;
 begin
-  Result := VarToStrDef(Values[AFieldIndex], '');
+
+  if VarIsNull(Values[AFieldIndex]) then
+    Result := '<null>'
+  else
+  if VarIsType(Values[AFieldIndex], varDate) then
+  begin
+    dt := Values[AFieldIndex];
+    if Trunc(dt) = 0 then
+      Result := FormatDateTime('HH:NN:SS', dt)
+    else if Frac(dt) = 0 then
+      Result := FormatDateTime('YYYY-MM-DD', dt)
+    else
+      Result := FormatDateTime('YYYY-MM-DD HH:NN:SS', dt);
+  end
+  else
+    Result := VarToStrDef(Values[AFieldIndex], '');
 end;
 
 { TDBReader }

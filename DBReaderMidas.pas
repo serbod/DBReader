@@ -43,11 +43,13 @@ type
     function ReadVarSizeData(ASize: Byte): AnsiString;
     function ReadFixSizeData(ASize: Integer): AnsiString;
 
-    function ReadInt(): Integer;
-    function ReadUInt(): Cardinal;
+    function ReadInt(ASize: Byte): Integer;
+    function ReadUInt(ASize: Byte): Cardinal;
     function ReadBool(): Boolean;
     function ReadFloat(): Double;
 
+    function ReadProp(var AProp: TDSProp): Boolean;
+    function ReadFieldDef(var AFieldDef: TDSFieldDef): Boolean;
 
   public
     procedure AfterConstruction(); override;
@@ -58,6 +60,8 @@ type
     // AName - table name
     // ACount - how many items read
     procedure ReadTable(AName: string; ACount: Int64 = MaxInt; AList: TDbRowsList = nil); override;
+    // get detailed multi-line description of table
+    function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; override;
   end;
 
 implementation
@@ -115,7 +119,7 @@ const
 
 function FieldTypeToDbFieldType(AFieldType: Word): TFieldType;
 begin
-  case AFieldType of
+  case AFieldType and MASK_FIELD_TYPE of
     FIELD_TYPE_INT:  Result := ftInteger;
     FIELD_TYPE_UINT: Result := ftInteger;
     FIELD_TYPE_BOOL: Result := ftBoolean;
@@ -136,6 +140,35 @@ begin
   end;
 end;
 
+function FieldTypeSizeToStr(AFieldType, AFieldSize: Word): string;
+begin
+  case AFieldType and MASK_FIELD_TYPE of
+    FIELD_TYPE_INT:  Result := 'INT';
+    FIELD_TYPE_UINT: Result := 'UINT';
+    FIELD_TYPE_BOOL: Result := 'BOOL';
+    FIELD_TYPE_FLOAT: Result := 'FLOAT';
+    FIELD_TYPE_BCD: Result := 'BCD';
+    FIELD_TYPE_DATE: Result := 'DATE';
+    FIELD_TYPE_TIME: Result := 'TIME';
+    FIELD_TYPE_TIMESTAMP: Result := 'TIMESTAMP';
+    FIELD_TYPE_ZSTRING: Result := 'CHAR(' + IntToStr(AFieldSize) + ')';
+    FIELD_TYPE_UNICODE: Result := 'UNICODE(' + IntToStr(AFieldSize) + ')';
+    FIELD_TYPE_BYTES: Result := 'BYTES(' + IntToStr(AFieldSize) + ')';
+    FIELD_TYPE_ADT: Result := 'ADT';
+    FIELD_TYPE_ARRAY: Result := 'ARRAY(' + IntToStr(AFieldSize) + ')';
+    FIELD_TYPE_NESTED: Result := 'NESTED';
+    FIELD_TYPE_REF: Result := 'REF';
+  else
+    Result := 'UNKNOWN';
+  end;
+
+  if (AFieldType and MASK_VARYNG_FLD) <> 0 then
+    Result := 'VAR_' + Result;
+
+  if (AFieldType and MASK_ARRAY_FLD) <> 0 then
+    Result := 'ARR_' + Result;
+end;
+
 { TDBReaderMidas }
 
 procedure TDBReaderMidas.AfterConstruction;
@@ -148,6 +181,43 @@ procedure TDBReaderMidas.BeforeDestruction;
 begin
   FreeAndNil(FFile);
   inherited;
+end;
+
+function TDBReaderMidas.FillTableInfoText(ATableName: string; ALines: TStrings): Boolean;
+var
+  i, ii: Integer;
+  FieldDef: TDSFieldDef;
+begin
+  Result := False;
+  if not Assigned(ALines) then Exit;
+
+  with ALines do
+  begin
+    Add(Format('== Fields  Count=%d', [FColCount]));
+    for i := 0 to Length(FFieldsDef) - 1 do
+    begin
+      FieldDef := FFieldsDef[i];
+      Add(Format('%.2d  FieldName=%s  Type=%s  Size=%d  Attrs=%d  PropCount=%d',
+        [i,
+         FieldDef.FieldName,
+         FieldTypeSizeToStr(FieldDef.FieldType, FieldDef.FieldSize),
+         FieldDef.FieldSize,
+         FieldDef.FieldAttrs,
+         FieldDef.FieldPropCount]));
+
+      for ii := 0 to FieldDef.FieldPropCount - 1 do
+      begin
+        Add(Format('    PropName=%s  Type=%s  Size=%d',
+          [
+           FieldDef.FieldProps[ii].PropName,
+           FieldTypeSizeToStr(FieldDef.FieldProps[ii].PropType, FieldDef.FieldProps[ii].PropSize),
+           FieldDef.FieldProps[ii].PropSize
+           ]));
+      end;
+
+    end;
+  end;
+  Result := True;
 end;
 
 function TDBReaderMidas.ReadFixSizeData(ASize: Integer): AnsiString;
@@ -165,14 +235,18 @@ begin
   FFile.ReadBuffer(Result, SizeOf(Result));
 end;
 
-function TDBReaderMidas.ReadInt: Integer;
+function TDBReaderMidas.ReadInt(ASize: Byte): Integer;
 begin
-  FFile.ReadBuffer(Result, SizeOf(Result));
+  Result := 0;
+  Assert(ASize <= 4, 'ReadInt(' + IntToStr(ASize) + ')');
+  FFile.ReadBuffer(Result, ASize);
 end;
 
-function TDBReaderMidas.ReadUInt: Cardinal;
+function TDBReaderMidas.ReadUInt(ASize: Byte): Cardinal;
 begin
-  FFile.ReadBuffer(Result, SizeOf(Result));
+  Result := 0;
+  Assert(ASize <= 4, 'ReadUInt(' + IntToStr(ASize) + ')');
+  FFile.ReadBuffer(Result, ASize);
 end;
 
 function TDBReaderMidas.ReadBool: Boolean;
@@ -207,6 +281,7 @@ begin
       AList.FieldsDef[i].Name := FFieldsDef[i].FieldName;
       AList.FieldsDef[i].FieldType := FieldTypeToDbFieldType(FFieldsDef[i].FieldType);
       AList.FieldsDef[i].Size := FFieldsDef[i].FieldSize;
+      AList.FieldsDef[i].TypeName := FieldTypeSizeToStr(FFieldsDef[i].FieldType, FFieldsDef[i].FieldSize);
     end;
   end;
 
@@ -225,11 +300,13 @@ begin
     // fields data
     for i := 0 to FColCount - 1 do
     begin
-      // Field status (is Null?)
+      // Field status, 2 bits for field
+      // BLANK_NULL = 1; { 'real' NULL }
+      // BLANK_NOTCHANGED = 2; { Not changed , compared to original value }
       iByteOffs := i div 4;
       iBitOffs := (i mod 4) * 2;
       iByteMask := $3 shl iBitOffs;
-      if ((FieldsStatus[iByteOffs] and iByteMask) shr iBitOffs) = 1 then
+      if ((FieldsStatus[iByteOffs] and iByteMask) shr iBitOffs) <> 0 then
       begin
         TmpRow.Values[i] := Null;
         Continue;
@@ -238,9 +315,9 @@ begin
       //FieldsDef[i].FieldSize
       case (FFieldsDef[i].FieldType and MASK_FIELD_TYPE) of
         FIELD_TYPE_INT:
-          TmpRow.Values[i] := ReadInt();
+          TmpRow.Values[i] := ReadInt(FFieldsDef[i].FieldSize);
         FIELD_TYPE_UINT:
-          TmpRow.Values[i] := ReadUInt();
+          TmpRow.Values[i] := ReadUInt(FFieldsDef[i].FieldSize);
         FIELD_TYPE_BOOL:
           TmpRow.Values[i] := ReadBool();
         FIELD_TYPE_FLOAT:
@@ -275,28 +352,11 @@ end;
 
 function TDBReaderMidas.ReadVarSizeData(ASize: Byte): AnsiString;
 var
-  Size1: Byte;
-  Size2: Word;
   Size4: Cardinal;
 begin
   Result := '';
-  Size4 := 0;
-  case ASize of
-    1:
-    begin
-      FFile.ReadBuffer(Size1, 1);
-      Size4 := Size1;
-    end;
-    2:
-    begin
-      FFile.ReadBuffer(Size2, 2);
-      Size4 := Size2;
-    end;
-    4:
-    begin
-      FFile.ReadBuffer(Size4, 4);
-    end;
-  end;
+  Assert(ASize <= 4, 'ReadVarSizeData(' + IntToStr(ASize) + ')');
+  Size4 := ReadInt(ASize);
   if Size4 > 0 then
   begin
     SetLength(Result, Size4);
@@ -304,60 +364,73 @@ begin
   end;
 end;
 
-function ReadProp(AStream: TStream; var AProp: TDSProp): Boolean;
+function TDBReaderMidas.ReadProp(var AProp: TDSProp): Boolean;
 var
   btLen: Byte;
   iSize: Cardinal;
 begin
-  Result := False;
   // prop name
-  AStream.ReadBuffer(btLen, 1);
-  if btLen = 0 then Exit;
-  SetLength(AProp.PropName, btLen);
-  AStream.ReadBuffer(AProp.PropName[1], btLen);
-  // prop size, type
-  AStream.ReadBuffer(AProp.PropSize, SizeOf(Word));
-  AStream.ReadBuffer(AProp.PropType, SizeOf(Word));
-  // prop data
-  if AProp.PropType = 130 then
+  AProp.PropName := '';
+  FFile.ReadBuffer(btLen, 1);
+  if btLen > 0 then
   begin
-    // array of UInt32
+    SetLength(AProp.PropName, btLen);
+    FFile.ReadBuffer(AProp.PropName[1], btLen);
+  end;
+  Assert(AProp.PropName <> '', 'ReadProp name empty');
+  // prop size, type
+  FFile.ReadBuffer(AProp.PropSize, SizeOf(Word));
+  FFile.ReadBuffer(AProp.PropType, SizeOf(Word));
+  // prop data
+  if (AProp.PropType and MASK_ARRAY_FLD) <> 0 then
+  begin
+    // array of PropSize
     iSize := 0;
-    AStream.ReadBuffer(iSize, AProp.PropSize);
-    AStream.Seek(iSize * SizeOf(Cardinal), soFromCurrent);
+    FFile.ReadBuffer(iSize, AProp.PropSize);
+    FFile.Seek(iSize * AProp.PropSize, soFromCurrent);
   end
   else
   if AProp.PropSize > 0 then
   begin
-    SetLength(AProp.PropData, AProp.PropSize);
-    AStream.ReadBuffer(AProp.PropData[1], AProp.PropSize);
+    iSize := AProp.PropSize;
+    if (AProp.PropType and MASK_VARYNG_FLD) <> 0 then
+    begin
+      // read size
+      iSize := ReadInt(AProp.PropSize);
+    end;
+    SetLength(AProp.PropData, iSize);
+    FFile.ReadBuffer(AProp.PropData[1], iSize);
   end;
   Result := True;
 end;
 
-function ReadFieldDef(AStream: TStream; var AFieldDef: TDSFieldDef): Boolean;
+function TDBReaderMidas.ReadFieldDef(var AFieldDef: TDSFieldDef): Boolean;
 var
   btLen: Byte;
   i: Integer;
 begin
   Result := False;
   // field name
-  AStream.ReadBuffer(btLen, 1);
-  if btLen = 0 then Exit;
-  SetLength(AFieldDef.FieldName, btLen);
-  AStream.ReadBuffer(AFieldDef.FieldName[1], btLen);
+  AFieldDef.FieldName := '';
+  FFile.ReadBuffer(btLen, 1);
+  if btLen > 0 then
+  begin
+    SetLength(AFieldDef.FieldName, btLen);
+    FFile.ReadBuffer(AFieldDef.FieldName[1], btLen);
+  end;
+  Assert(AFieldDef.FieldName <> '', 'ReadFieldDef name empty');
   // size, type, attrs
-  AStream.ReadBuffer(AFieldDef.FieldSize, SizeOf(Word));
-  AStream.ReadBuffer(AFieldDef.FieldType, SizeOf(Word));
-  AStream.ReadBuffer(AFieldDef.FieldAttrs, SizeOf(Word));
+  FFile.ReadBuffer(AFieldDef.FieldSize, SizeOf(Word));
+  FFile.ReadBuffer(AFieldDef.FieldType, SizeOf(Word));
+  FFile.ReadBuffer(AFieldDef.FieldAttrs, SizeOf(Word));
   // props
-  AStream.ReadBuffer(AFieldDef.FieldPropCount, SizeOf(Word));
+  FFile.ReadBuffer(AFieldDef.FieldPropCount, SizeOf(Word));
   if AFieldDef.FieldPropCount > 0 then
   begin
     SetLength(AFieldDef.FieldProps, AFieldDef.FieldPropCount);
     for i := 0 to AFieldDef.FieldPropCount - 1 do
     begin
-      if not ReadProp(AStream, AFieldDef.FieldProps[i]) then
+      if not ReadProp(AFieldDef.FieldProps[i]) then
         Exit;
     end;
   end;
@@ -386,14 +459,14 @@ begin
   SetLength(FFieldsDef, FColCount);
   for i := 0 to FColCount - 1 do
   begin
-    if not ReadFieldDef(FFile, FFieldsDef[i]) then Exit;
+    if not ReadFieldDef(FFieldsDef[i]) then Exit;
   end;
 
   // read packet props
   FFile.ReadBuffer(iPropsCount, SizeOf(iPropsCount));
   for i := 0 to iPropsCount - 1 do
   begin
-    if not ReadProp(FFile, TmpProp) then Exit;
+    if not ReadProp(TmpProp) then Exit;
   end;
   FFirstRecPosition := FFile.Position;
 

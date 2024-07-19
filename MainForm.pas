@@ -1,5 +1,12 @@
 unit MainForm;
 
+(*
+Âatabase browser, main form
+
+Author: Sergey Bodrov, 2024 Minsk
+License: MIT
+*)
+
 interface
 
 uses
@@ -201,7 +208,7 @@ begin
       if (ACol >= 0) and (ACol < Length(FRowsList.FieldsDef)) then
         s := FRowsList.FieldsDef[ACol].Name;
     end
-    else if (ARow <= FRowsList.Count) then
+    else if (ARow <= FRowsList.Count) and (ACol < Length(FRowsList.FieldsDef)) then
     begin
       TmpField := FRowsList.FieldsDef[ACol];
       TmpRow := FRowsList.GetItem(ARow-1);
@@ -335,16 +342,18 @@ begin
 
   memoLog.Lines.BeginUpdate();
   memoLog.Lines.Clear();
-
-  if (sExt = '.gdb') or (sExt = '.fdb') then
-    OpenFB(FDbFileName)
-  else
-  if (sExt = '.cds') then
-    OpenCDS(FDbFileName)
-  else
-  if (sExt = '.db') then
-    OpenParadox(FDbFileName);
-  memoLog.Lines.EndUpdate();
+  try
+    if (sExt = '.gdb') or (sExt = '.fdb') then
+      OpenFB(FDbFileName)
+    else
+    if (sExt = '.cds') then
+      OpenCDS(FDbFileName)
+    else
+    if (sExt = '.db') then
+      OpenParadox(FDbFileName);
+  finally
+    memoLog.Lines.EndUpdate();
+  end;
 end;
 
 procedure TFormMain.OpenFB(AFileName: string);
@@ -355,8 +364,6 @@ begin
   //FReader.IsLogBlobs := True;
   //FReader.DebugRelID := 12;
   FReader.OpenFile(AFileName);
-
-  //FReader.DumpSystemTables('sys_tables.txt');
 
   FillTree();
 end;

@@ -1,7 +1,7 @@
 object FormMain: TFormMain
   Left = 0
   Top = 0
-  Caption = 'test FireBird database file reader'
+  Caption = 'Database file browser'
   ClientHeight = 474
   ClientWidth = 792
   Color = clBtnFace
@@ -78,10 +78,6 @@ object FormMain: TFormMain
     TabOrder = 1
     object tsLog: TTabSheet
       Caption = 'Log'
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoLog: TMemo
         AlignWithMargins = True
         Left = 4
@@ -109,10 +105,6 @@ object FormMain: TFormMain
     object tsGrid: TTabSheet
       Caption = 'Grid'
       ImageIndex = 1
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object dgItems: TDrawGrid
         Left = 0
         Top = 0
@@ -156,12 +148,20 @@ object FormMain: TFormMain
     FavoriteLinks = <>
     FileTypes = <
       item
+        DisplayName = 'Database files'
+        FileMask = '*.gdb;*.fdb;*.cds;*.db'
+      end
+      item
         DisplayName = 'Interbase/Firebird files (*.gdb, *.fdb)'
         FileMask = '*.gdb;*.fdb'
       end
       item
-        DisplayName = 'Firebird files (*.fdb)'
-        FileMask = '*.fdb'
+        DisplayName = 'Midas/DataSnap files (*.cds)'
+        FileMask = '*.cds'
+      end
+      item
+        DisplayName = 'Paradox files (*.db)'
+        FileMask = '*.db'
       end
       item
         DisplayName = 'All files (*.*)'

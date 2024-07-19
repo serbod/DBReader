@@ -304,7 +304,7 @@ begin
               ValInteger := 0;
               if _ReadInt(ValInteger, iValSize) then
               begin
-                ValDateTime := ValInteger - 693961;  // days between Year 0000 and Year 1900
+                ValDateTime := ValInteger - 693594;  // days between Year 0000 and Year 1900
                 TmpRow.Values[ii] := ValDateTime;
               end
               else

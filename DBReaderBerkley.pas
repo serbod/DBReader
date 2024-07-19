@@ -1,7 +1,7 @@
 unit DBReaderBerkley;
 
 (*
-Berkley database file reader
+Berkley database file reader (not tested!)
 
 Author: Sergey Bodrov, 2024
 License: MIT
