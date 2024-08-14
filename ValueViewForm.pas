@@ -16,6 +16,10 @@ type
     lbType: TLabel;
     lbSize: TLabel;
     lbSizeText: TLabel;
+    chkFullRaw: TCheckBox;
+    lbRawOffsText: TLabel;
+    lbRawOffs: TLabel;
+    procedure chkFullRawClick(Sender: TObject);
   private
     { Private declarations }
   public
@@ -72,6 +76,11 @@ end;
 
 { TFormRawValue }
 
+procedure TFormRawValue.chkFullRawClick(Sender: TObject);
+begin
+  UpdateView();
+end;
+
 procedure TFormRawValue.ShowValue(ARawData: AnsiString; ARawOffs, ARawLen: Integer);
 begin
   RawData := Copy(ARawData, 1, MaxInt);
@@ -88,18 +97,51 @@ var
 begin
   lbType.Caption := FieldTypeName;
   lbSize.Caption := IntToStr(RawLen);
+  lbRawOffs.Caption := IntToStr(RawOffs);
   s := '';
-  NewOffs := RawOffs+1;
+  {NewOffs := RawOffs+1;
   while NewOffs > Length(RawData) do
   begin
     Dec(NewOffs);
     s := s + '   ';
   end;
   if (NewOffs + (NewLen-1)) < Length(RawData) then
-    NewLen := Length(RawData) - NewOffs;
-  if NewLen > 0 then
+    NewLen := Length(RawData) - NewOffs;   }
+
+  if chkFullRaw.Checked then
   begin
-    memoHex.Text := BufferToHex(RawData[RawOffs+1], RawLen);
+    // full raw dump
+    NewOffs := RawOffs+1;
+    NewLen := RawLen;
+    if NewOffs + NewLen > Length(RawData) then
+      NewLen := Length(RawData) - NewOffs - 1;
+    if (NewOffs <= Length(RawData)) and (NewLen > 0) then
+    begin
+      s := BufferToHex(RawData[1], RawOffs);
+      s := s + '[' + BufferToHex(RawData[RawOffs+1], RawLen) + ']';
+      // next line
+      //if (Length(s) mod 23) = 0 then
+      //  s := s + sLineBreak;
+      NewOffs := RawOffs + 1 + RawLen;
+      NewLen := Length(RawData) - NewOffs - 1;
+      if (NewOffs <= Length(RawData)) and (NewLen > 0) then
+        s := s + BufferToHex(RawData[NewOffs], NewLen);
+    end;
+  end
+  else
+  begin
+    NewOffs := RawOffs+1;
+    NewLen := RawLen;
+    if NewOffs + NewLen > Length(RawData) then
+      NewLen := Length(RawData) - NewOffs - 1;
+
+    if NewOffs <= Length(RawData) then
+      s := BufferToHex(RawData[NewOffs], NewLen);
+  end;
+
+  if RawLen > 0 then
+  begin
+    memoHex.Text := s;
     memoText.Text := DataAsStr(RawData[RawOffs+1], RawLen);
   end
   else

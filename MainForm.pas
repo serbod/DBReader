@@ -58,7 +58,7 @@ type
     procedure FillTree();
     procedure ShowTable(ATableName: string);
     procedure OpenFB(AFileName: string);
-    procedure OpenBDB(AFileName: string);
+    procedure OpenBDB(AFileName: string);  // BerkleyDB (not tested)
     procedure OpenCDS(AFileName: string);
     procedure OpenParadox(AFileName: string);
   public
@@ -89,7 +89,7 @@ begin
   case AField.FieldType of
     ftString, ftWideString, ftMemo: Result := clGreen;       // string
     ftInteger, ftSmallint, ftLargeint: Result := clNavy;  // integer
-    ftFloat: Result := clMaroon; // float
+    ftFloat, ftCurrency: Result := clMaroon; // float
     ftDate, ftTime, ftDateTime, ftTimeStamp: Result := clTeal;     // date
     ftBytes, ftVarBytes, ftBlob: Result := clPurple;   // blob
   else // ftUnknown
@@ -131,10 +131,14 @@ begin
       end
       else
       begin
-        // calculate offset
-        iOffs := ((Length(FRowsList.FieldsDef) div 32) + 1) * 4;
-        for i := 0 to FCurColIndex-1 do
-          iOffs := iOffs + FRowsList.FieldsDef[i].Size;
+        iOffs := TmpField.RawOffset;
+        if iOffs = 0 then
+        begin
+          // calculate offset
+          iOffs := ((Length(FRowsList.FieldsDef) div 32) + 1) * 4;
+          for i := 0 to FCurColIndex-1 do
+            iOffs := iOffs + FRowsList.FieldsDef[i].Size;
+        end;
         FormRawValue.FieldTypeName := TmpField.TypeName;
         FormRawValue.ShowValue(TmpRow.RawData, iOffs, TmpField.Size);
       end;
@@ -192,7 +196,7 @@ begin
         s := TmpRow.GetFieldAsStr(ARow-1);
         clText := GetFieldColor(TmpField);
         // align numbers to right side
-        if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat] then
+        if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat, ftCurrency] then
         //if VarIsOrdinal(TmpRow.Values[]) or VarIsFloat(TmpField.Value) then
           tf := [tfRight];
       end;
@@ -220,7 +224,7 @@ begin
           s := TmpRow.GetFieldAsStr(ACol);
           clText := GetFieldColor(TmpField);
           // align numbers to right side
-          if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat] then
+          if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat, ftCurrency] then
           //if VarIsOrdinal(TmpRow.Data[ACol]) or VarIsFloat(TmpRow.Data[ACol]) then
             tf := [tfRight];
         end;
@@ -253,6 +257,7 @@ var
 begin
   if not (FReader is TDBReaderFB) then Exit;
   tvMain.Items.BeginUpdate();
+  tvMain.Items.Clear();
   // System tables
   tnSys := AddTreeNode(nil, 'System tables', '');
   for i := 0 to (FReader as TDBReaderFB).RelationsList.Count - 1 do
@@ -319,6 +324,7 @@ begin
   FReader.OnLog := OnLogHandler;
   FReader.OpenFile(AFileName);
 
+  tvMain.Items.Clear();
   ShowTable(ExtractFileName(AFileName));
 end;
 
@@ -374,6 +380,7 @@ begin
   FReader.OnLog := OnLogHandler;
   FReader.OpenFile(AFileName);
 
+  tvMain.Items.Clear();
   ShowTable((FReader as TDBReaderParadox).TableName);
 end;
 

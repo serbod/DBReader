@@ -20,7 +20,6 @@ object FormRawValue: TFormRawValue
     Height = 53
     Align = alTop
     TabOrder = 0
-    ExplicitWidth = 687
     object lbTypeText: TLabel
       Left = 16
       Top = 8
@@ -61,6 +60,35 @@ object FormRawValue: TFormRawValue
       Height = 16
       Caption = 'Size:'
     end
+    object lbRawOffsText: TLabel
+      Left = 348
+      Top = 8
+      Width = 60
+      Height = 16
+      Caption = 'RAW Offs:'
+    end
+    object lbRawOffs: TLabel
+      Left = 412
+      Top = 8
+      Width = 8
+      Height = 16
+      Caption = '0'
+      Font.Charset = DEFAULT_CHARSET
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = 'Tahoma'
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object chkFullRaw: TCheckBox
+      Left = 348
+      Top = 26
+      Width = 97
+      Height = 17
+      Caption = 'Full RAW'
+      TabOrder = 0
+      OnClick = chkFullRawClick
+    end
   end
   object panDataView: TPanel
     Left = 0
@@ -69,10 +97,6 @@ object FormRawValue: TFormRawValue
     Height = 247
     Align = alClient
     TabOrder = 1
-    ExplicitLeft = 216
-    ExplicitTop = 128
-    ExplicitWidth = 185
-    ExplicitHeight = 41
     object memoHex: TMemo
       Left = 1
       Top = 1
@@ -89,7 +113,6 @@ object FormRawValue: TFormRawValue
         '08 09 0A 0B 0C 0D 0E 0F')
       ParentFont = False
       TabOrder = 0
-      ExplicitHeight = 385
     end
     object memoText: TMemo
       Left = 201
@@ -100,10 +123,6 @@ object FormRawValue: TFormRawValue
       Lines.Strings = (
         'memoText')
       TabOrder = 1
-      ExplicitLeft = 324
-      ExplicitTop = 72
-      ExplicitWidth = 185
-      ExplicitHeight = 89
     end
   end
 end

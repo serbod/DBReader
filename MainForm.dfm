@@ -73,35 +73,9 @@ object FormMain: TFormMain
     Top = 0
     Width = 603
     Height = 474
-    ActivePage = tsTableInfo
+    ActivePage = tsLog
     Align = alClient
     TabOrder = 1
-    object tsLog: TTabSheet
-      Caption = 'Log'
-      object memoLog: TMemo
-        AlignWithMargins = True
-        Left = 4
-        Top = 4
-        Width = 587
-        Height = 435
-        Margins.Left = 4
-        Margins.Top = 4
-        Margins.Right = 4
-        Margins.Bottom = 4
-        Align = alClient
-        Font.Charset = DEFAULT_CHARSET
-        Font.Color = clWindowText
-        Font.Height = -13
-        Font.Name = 'Courier New'
-        Font.Style = []
-        Lines.Strings = (
-          'memoLog')
-        ParentFont = False
-        ScrollBars = ssBoth
-        TabOrder = 0
-        WordWrap = False
-      end
-    end
     object tsGrid: TTabSheet
       Caption = 'Grid'
       ImageIndex = 1
@@ -137,6 +111,32 @@ object FormMain: TFormMain
         Font.Height = -13
         Font.Name = 'Courier New'
         Font.Style = []
+        ParentFont = False
+        ScrollBars = ssBoth
+        TabOrder = 0
+        WordWrap = False
+      end
+    end
+    object tsLog: TTabSheet
+      Caption = 'Log'
+      object memoLog: TMemo
+        AlignWithMargins = True
+        Left = 4
+        Top = 4
+        Width = 587
+        Height = 435
+        Margins.Left = 4
+        Margins.Top = 4
+        Margins.Right = 4
+        Margins.Bottom = 4
+        Align = alClient
+        Font.Charset = DEFAULT_CHARSET
+        Font.Color = clWindowText
+        Font.Height = -13
+        Font.Name = 'Courier New'
+        Font.Style = []
+        Lines.Strings = (
+          'memoLog')
         ParentFont = False
         ScrollBars = ssBoth
         TabOrder = 0

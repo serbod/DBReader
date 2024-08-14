@@ -8,6 +8,12 @@ License: MIT
 
 Thanks to Norman Dunbar for database structure explanation!
 https://www.ibexpert.net/ibe/pmwiki.php?n=Doc.StructureOfADataPage
+
+-- tested versions:
+InterBase 6  (ODS 10)
+InterBase 7  (ODS 11)
+FireBird 2   (ODS 11)
+FireBird 2.5 (ODS 11.2)
 *)
 
 {$A8}  // align fields in records by 8 bytes
@@ -20,18 +26,19 @@ uses
 type
   TDBReaderFB = class;
   TRDB_RelationsItem = class;
+  TRDB_RowsList = class;
 
   TRDB_FieldInfoRec = record
     Size: Integer;
-    FieldType: Word;
+    FieldType: Word;     // from FIELDS
     FieldLength: Word;   // data length, not size
     FieldSubType: Integer;
     Name: string;
-    DType: Byte;
-    Scale: Shortint;
-    Length: Word;
+    DType: Byte;         // from FORMATS
+    Scale: Integer;
+    Length: Word;        // from FORMATS
     SubType: Word;
-    Flags: Word;
+    Flags: Cardinal;
     Offset: Cardinal;
 
     function AsString(): string;
@@ -54,6 +61,7 @@ type
     FRowID: Cardinal;    // (PageSeq * FMaxRecPerPage) + RecIndex
     function ReadInt(ABytes: Integer = 4): Integer;
     function ReadInt64(ABytes: Integer = 8): Int64;
+    function ReadCurrency(ABytes: Integer = 8): Currency;
     function ReadFloat(ABytes: Integer = 8): Double;
     // AType 0-DateTime 1-Date 2-Time
     function ReadDateTime(AType: Integer = 0; ABytes: Integer = 8): TDateTime;
@@ -85,7 +93,11 @@ type
     // fill FieldsInfo for system table by ARelID
     procedure FillSysTableInfo(ARelID: Integer);
     // ODS 11 (FB 2.1)
-    procedure FillSysTableInfo_11(ARelID: Integer);
+    procedure FillSysTableInfo_fb11(ARelID: Integer);
+    // ODS 10 (IB )
+    procedure FillSysTableInfo_ib10(ARelID: Integer);
+    // ODS 11 (IB )
+    procedure FillSysTableInfo_ib11(ARelID: Integer);
   public
     FieldsInfo: array of TRDB_FieldInfoRec;
     RelationID: Integer;
@@ -235,6 +247,7 @@ type
     FOdsVersion: Integer;
     FMaxRecPerPage: Word;              // for calculation of Seq/Rec from RecID
     FIsMetadataReaded: Boolean;        // true after FillTableInfo()
+    FIsInterBase: Boolean;
 
     //FOdsHeader: Ods_header_page;
 
@@ -287,6 +300,7 @@ type
 
     property RelationsList: TRDB_RowsList read FRelationsList;       // (rel=6)
     property OdsVersion: Integer read FOdsVersion;
+    property IsInterBase: Boolean read FIsInterBase;  // False if FireBird
 
     property OnLog: TGetStrProc read FOnLog write FOnLog;
   end;
@@ -459,6 +473,7 @@ begin
   end;
 end;
 
+// see also GetFieldSizeByTypeLen()
 function FieldTypeToStr(AType, ALen, ASubType: Word): string;
 begin
   case AType of
@@ -466,8 +481,20 @@ begin
     8: Result := 'INTEGER';
     //8: Values[i] := ReadInt64(); // INTEGER
     10: Result := 'FLOAT';
-    14: Result := Format('CHAR(%d)', [ALen]);
-    27: Result := 'INT64';
+    14: // CHAR
+    begin
+      Result := Format('CHAR(%d)', [ALen]);
+      case ASubType of
+        3: Result := Result + 'UTF8';
+      end;
+    end;
+    16: // CURRENCY
+    begin
+      Result := 'INT64';
+      if ASubType = 1 then
+        Result := 'CURRENCY';  // ???
+    end;
+    27: Result := 'DOUBLE';  //'INT64';
     35: Result := 'DATETIME';
     37: Result := Format('VARCHAR(%d)', [ALen]);
     261: // BLOB
@@ -486,6 +513,7 @@ begin
   end;
 end;
 
+// see also GetFieldSizeByTypeLen()
 function FieldTypeToDbFieldType(AType, ALen, ASubType: Word): TFieldType;
 begin
   case AType of
@@ -494,7 +522,13 @@ begin
     //8: Values[i] := ReadInt64(); // INTEGER
     10: Result := ftFloat;
     14: Result := ftString;
-    27: Result := ftLargeint;
+    16:
+    begin
+      Result := ftLargeint;
+      if ASubType = 1 then
+        Result := ftCurrency;
+    end;
+    27: Result := ftFloat; // ftLargeint;
     35: Result := ftDateTime;
     37: Result := ftString;
     261: // BLOB
@@ -944,9 +978,9 @@ var
   Field: TRDB_FieldsItem;
 begin
   SortPagesList();
-  LogInfo('=== Sorted pages ===');
-  for i := 0 to FPagesList.Count - 1 do
-    LogInfo(Format('%s', [FPagesList.GetItem(i).GetAsText]));
+  //LogInfo('=== Sorted pages ===');
+  //for i := 0 to FPagesList.Count - 1 do
+  //  LogInfo(Format('%s', [FPagesList.GetItem(i).GetAsText]));
   
   for i := 0 to FRelationFieldsList.Count - 1 do
   begin
@@ -956,11 +990,19 @@ begin
     for ii := 0 to FRelationsList.Count - 1 do
     begin
       Rel := FRelationsList.GetItem(ii) as TRDB_RelationsItem;
-      if Rel.RelationName = RelField.RelationName then
+      if ((RelField.RelationName <> '') and (Rel.RelationName = RelField.RelationName)) then
+        Break
+      else // RelationName is empty for InterBase
+      if ((RelField.RelationName = '') and (Rel.RelationName = RelField.FieldSource)) then
         Break;
       Rel := nil;
     end;
-    if not Assigned(Rel) then Continue;
+    //Assert(Assigned(Field), 'Not found Relation for RelField RelationName=' + RelField.RelationName + '  FieldSource=' + RelField.FieldSource);
+    if not Assigned(Rel) then
+    begin
+      LogInfo(Format('Not found Relation for RelField RelationName=%s  FieldSource=%s', [RelField.RelationName, RelField.FieldSource]));
+      Continue;
+    end;
 
     if not Assigned(Rel._Format) then
     begin
@@ -980,19 +1022,28 @@ begin
     for ii := 0 to FFieldsList.Count - 1 do
     begin
       Field := FFieldsList.GetItem(ii) as TRDB_FieldsItem;
-      if Field.FieldName = RelField.FieldSource then
+      if (Field.FieldName = RelField.FieldSource)
+      or (Field.FieldName = RelField.BaseField) then
         Break;
       Field := nil;
     end;
-    if not Assigned(Field) then Continue;
+    //Assert(Assigned(Field), 'Not found Field for RelField FieldSource=' + RelField.FieldSource + '  BaseField=' + RelField.BaseField);
+    if not Assigned(Field) then
+    begin
+      LogInfo(Format('Not found Field for RelField FieldSource=%s  BaseField=%s', [RelField.FieldSource, RelField.BaseField]));
+      Continue;
+    end;
 
     // update relation info
-    n := RelField.FieldID;
+    n := RelField.FieldID;    // always 0 for InterBase ???
+    if IsInterBase then
+      n := Length(Rel._FieldsInfo);
     //n := RelField.FieldPosition;
     if (n + 1) > Length(Rel._FieldsInfo) then
       SetLength(Rel._FieldsInfo, n + 1);
     Rel._FieldsInfo[n].Name := RelField.FieldName;
     Rel._FieldsInfo[n].Size := GetFieldSizeByTypeLen(Field.FieldType, Field.FieldLength, Field.FieldSubType);
+    Rel._FieldsInfo[n].DType := 0;  // default
     Rel._FieldsInfo[n].FieldType := Field.FieldType;
     Rel._FieldsInfo[n].FieldLength := Field.FieldLength;
     Rel._FieldsInfo[n].FieldSubType := Field.FieldSubType;
@@ -1216,8 +1267,14 @@ begin
     7: Result := 2; // SMALLINT
     8: Result := 4; // INTEGER
     10: Result := 8; // FLOAT
-    14: Result := ALen; // CHAR
-    27: Result := 8; // INT64
+    14: // CHAR
+    begin
+      Result := ALen;
+      if ASubType = 3 then
+        Inc(Result);
+    end;
+    16: Result := 8; // INT64
+    27: Result := 8; // DOUBLE
     35: Result := 8; // TIMESTAMP (DateTime)
     37: Result := ALen + 2; // VARCHAR
     261: // BLOB
@@ -1328,6 +1385,7 @@ var
   i: Integer;
   RelItem: TRDB_RelationsItem;
   TmpField: TRDB_FieldInfoRec;
+  s: string;
 begin
   Result := False;
   if not Assigned(ALines) then Exit;
@@ -1360,35 +1418,35 @@ begin
       Add(Format('ViewBlr=%s', [RelItem.GetBlobValue(RelItem.ViewBlr)]));
       Add(Format('ViewSource=%s', [RelItem.GetBlobValue(RelItem.ViewSource)]));
       Add(Format('== Fields  Count=%d', [Length(RelItem._FieldsInfo)]));
-      for i := 0 to Length(RelItem._FieldsInfo) - 1 do
-      begin
-        TmpField := RelItem._FieldsInfo[i];
-        if RelItem._FieldsInfo[i].DType = 0 then
-        begin
-          Add(Format('%.2d FieldName=%s  Size=%d  Type=%s  Len=%d  SubType=%d',
-            [i,
-             RelItem._FieldsInfo[i].Name,
-             RelItem._FieldsInfo[i].Size,
-             RelItem._FieldsInfo[i].AsString,
-             RelItem._FieldsInfo[i].FieldLength,
-             RelItem._FieldsInfo[i].FieldSubType]));
-        end
-        else
-        begin
-          Add(Format('%.2d FieldName=%s  DType=%s  Len=%d  SubType=%d  Flags=%d  Offs=%d',
-            [i,
-             RelItem._FieldsInfo[i].Name,
-             RelItem._FieldsInfo[i].AsString,
-             RelItem._FieldsInfo[i].Length,
-             RelItem._FieldsInfo[i].SubType,
-             RelItem._FieldsInfo[i].Flags,
-             RelItem._FieldsInfo[i].Offset
-             ]));
-        end;
-      end;
-      if Assigned(RelItem._Format) then
-        Add(Format('== Format  Length=%d', [Length(RelItem._Format.Descriptor.Data)]));
     end;
+    for i := 0 to Length(RelItem._FieldsInfo) - 1 do
+    begin
+      TmpField := RelItem._FieldsInfo[i];
+      s := Format('%.2d Name=%s  Type=%s', [i, RelItem._FieldsInfo[i].Name, RelItem._FieldsInfo[i].AsString]);
+      if RelItem._FieldsInfo[i].FieldType <> 0 then
+      begin
+        s := s + Format('  Field=(%s Type=%d.%d Len=%d)',
+          [FieldTypeToStr(RelItem._FieldsInfo[i].FieldType, RelItem._FieldsInfo[i].FieldLength, RelItem._FieldsInfo[i].FieldSubType),
+           RelItem._FieldsInfo[i].FieldType,
+           RelItem._FieldsInfo[i].FieldSubType,
+           RelItem._FieldsInfo[i].FieldLength
+          ]);
+      end;
+      if RelItem._FieldsInfo[i].DType <> 0 then
+      begin
+        s := s + Format('  Format=(%s  DType=%d.%d  Len=%d  Flags=%d  Offs=%d)',
+          [DataTypeToStr(RelItem._FieldsInfo[i].DType, RelItem._FieldsInfo[i].Length, RelItem._FieldsInfo[i].SubType),
+           RelItem._FieldsInfo[i].DType,
+           RelItem._FieldsInfo[i].SubType,
+           RelItem._FieldsInfo[i].Length,
+           RelItem._FieldsInfo[i].Flags,
+           RelItem._FieldsInfo[i].Offset
+          ]);
+      end;
+      ALines.Add(s);
+    end;
+    if Assigned(RelItem._Format) then
+      ALines.Add(Format('== Format  Length=%d', [Length(RelItem._Format.Descriptor.Data)]));
     Result := True;
   end;
 end;
@@ -1423,7 +1481,13 @@ begin
 
   LogInfo(Format('=== %d %s ===', [0, OdsPageTypeToStr(OdsHeader.PageHead.PageType)]));
   LogInfo(Format('PageSize=%d', [OdsHeader.PageSize]));
-  LogInfo(Format('ODS Version=%d.%d', [(OdsHeader.OdsVersion and $0F), ((OdsHeader.OdsVersion and $7FF0) shr 4)]));
+  s := Format('ODS Version=%d.%d', [(OdsHeader.OdsVersion and $0F), ((OdsHeader.OdsVersion and $7FF0) shr 4)]);
+  FIsInterBase := (OdsHeader.OdsVersion and $8000) = 0;
+  if FIsInterBase then
+    s := s + ' (InterBase)'
+  else
+    s := s + ' (FireBird)';
+  LogInfo(s);
   if IsLogPages then
   begin
     LogInfo(Format('PAGES=%d', [OdsHeader.PagesPage]));
@@ -1793,11 +1857,17 @@ begin
   begin
     RowList := (AList as TRDB_RowsList);
     // fill rel info form list info, if not filled
-    if FOdsVersion = 11 then
-      RowList.FillSysTableInfo_11(RelID)
+    if (FOdsVersion = 11) and IsInterBase then
+      RowList.FillSysTableInfo_ib11(RelID)
+    else if (FOdsVersion = 11) then
+      RowList.FillSysTableInfo_fb11(RelID)
+    else if (FOdsVersion = 10) and IsInterBase then
+      RowList.FillSysTableInfo_ib10(RelID)
     else
       RowList.FillSysTableInfo(RelID);
-    Assert(High(RelItem._FieldsInfo) = High(RowList.FieldsInfo), ' List and item FieldsInfo not same length!');
+    Assert(High(RelItem._FieldsInfo) = High(RowList.FieldsInfo),
+      Format(' List (%d) and item (%d) FieldsInfo not same length!', [Length(RowList.FieldsInfo), Length(RelItem._FieldsInfo)]));
+    // copy fields format info from table to relation item
     for i := Low(RowList.FieldsInfo) to High(RowList.FieldsInfo) do
     begin
       if RelItem._FieldsInfo[i].DType = 0 then
@@ -2107,6 +2177,7 @@ begin
   Result := False;
   FlagIndex := AIndex div 8;
   FlagOffs := AIndex mod 8;
+
   if FlagIndex < Length(RawData) then
     Result := (Ord(RawData[FlagIndex+1]) and (Byte(1) shl FlagOffs)) <> 0;
 end;
@@ -2215,6 +2286,14 @@ begin
     Result := Trim(Copy(RawData, FDataPos, nPos-FDataPos));
 
   Inc(FDataPos, ACount);
+end;
+
+function TRDB_RowItem.ReadCurrency(ABytes: Integer): Currency;
+begin
+  Result := 0;
+  if (ABytes > 0) and (Length(RawData) >= (FDataPos + ABytes)) then
+    Move(RawData[FDataPos], Result, 8);
+  Inc(FDataPos, ABytes);
 end;
 
 procedure TRDB_RowItem.ReadData(const AData: AnsiString);
@@ -2392,14 +2471,45 @@ procedure TRDB_FieldsItem.ReadData(const AData: AnsiString);
 begin
   //StrToFile(AData, 'test_s1.data');
   inherited;
-  FieldName := ReadChar(31);       // CHAR(31)
-  QueryName := ReadChar(31);       // CHAR(31)
-  ValidationBlr := ReadBlob(2);    // BLOB SUB_TYPE 2
-  ValidationSource := ReadBlob(1, 14); // BLOB SUB_TYPE TEXT    14
-  ComputedBlr := ReadBlob(2);      // BLOB SUB_TYPE 2
-  ComputedSource := ReadBlob(1, 14); // BLOB SUB_TYPE TEXT    14
-  DefaultValue := ReadBlob(2);     // BLOB SUB_TYPE 2
-  DefaultSource := ReadBlob(1, 14); // BLOB SUB_TYPE TEXT    14
+
+  if Reader.IsInterBase then
+  begin
+    if Reader.OdsVersion = 10 then
+    begin
+      FieldName := ReadChar(31);       // CHAR(31)
+      Inc(FDataPos, 1);
+      QueryName := ReadChar(31);       // CHAR(31)
+      Inc(FDataPos, 1);
+    end
+    else
+    begin
+      FieldName := ReadChar(67);       // CHAR(67)
+      Inc(FDataPos, 1);
+      QueryName := ReadChar(67);       // CHAR(67)
+      Inc(FDataPos, 1);
+    end;
+    ValidationBlr := ReadBlob(2, 8);    // BLOB SUB_TYPE 2
+    ValidationSource := ReadBlob(1, 8); // BLOB SUB_TYPE TEXT    8
+    ComputedBlr := ReadBlob(2, 8);      // BLOB SUB_TYPE 2      8
+    ComputedSource := ReadBlob(1, 8); // BLOB SUB_TYPE TEXT    8
+    DefaultValue := ReadBlob(2, 8);     // BLOB SUB_TYPE 2    8
+    DefaultSource := ReadBlob(1, 8); // BLOB SUB_TYPE TEXT    8
+    if Reader.OdsVersion = 10 then
+      FDataPos := 116 + 1
+    else
+      FDataPos := 188 + 1;  // pos 188
+  end
+  else // FireBird
+  begin
+    FieldName := ReadChar(31);       // CHAR(31)
+    QueryName := ReadChar(31);       // CHAR(31)
+    ValidationBlr := ReadBlob(2);    // BLOB SUB_TYPE 2
+    ValidationSource := ReadBlob(1, 14); // BLOB SUB_TYPE TEXT    14
+    ComputedBlr := ReadBlob(2);      // BLOB SUB_TYPE 2
+    ComputedSource := ReadBlob(1, 14); // BLOB SUB_TYPE TEXT    14
+    DefaultValue := ReadBlob(2);     // BLOB SUB_TYPE 2
+    DefaultSource := ReadBlob(1, 14); // BLOB SUB_TYPE TEXT    14
+  end;
   FieldLength := ReadInt(2);       // SMALLINT
   FieldScale := ReadInt(2);        // SMALLINT
   FieldType := ReadInt(2);         // SMALLINT
@@ -2440,8 +2550,16 @@ begin
   RelationName := ReadChar(31);    // CHAR(31)
   FieldSource := ReadChar(31);     // CHAR(31)
   QueryName := ReadChar(31);       // CHAR(31)
-  BaseField := ReadChar(31);       // CHAR(31)
-  EditString := ReadVarChar(125, 129); // VARCHAR(125)        125+4
+  if Reader.IsInterBase and (Reader.OdsVersion = 11) then
+  begin
+    BaseField := ReadChar(63);       // CHAR(31)
+    EditString := ReadVarChar(125, 129); // VARCHAR(125)        125+4
+  end
+  else // FireBird
+  begin
+    BaseField := ReadChar(31);       // CHAR(31)
+    EditString := ReadVarChar(125, 129); // VARCHAR(125)        125+4
+  end;
   FieldPosition := ReadInt(2);     // SMALLINT
   QueryHeader := ReadBlob(1, 14);  // BLOB SUB_TYPE TEXT      14
   UpdateFlag := ReadInt(2);        // SMALLINT
@@ -2476,10 +2594,21 @@ procedure TRDB_RelationsItem.ReadData(const AData: AnsiString);
 begin
   //StrToFile(AData, 'test_s1.data');
   inherited;
-  ViewBlr := ReadBlob(2);         // BLOB SUB_TYPE 2 BLR   ? 4
-  ViewSource := ReadBlob(1);      // BLOB SUB_TYPE 1 TEXT  ? 8
-  Description := ReadBlob(1);     // BLOB SUB_TYPE 1 TEXT  ? 8
-  Inc(FDataPos, 8);               // skip 8
+  //if (Owner as TRDB_RowsList). then
+  if Reader.IsInterBase then
+  begin
+    ViewBlr := ReadBlob(1);         // BLOB SUB_TYPE 2 BLR   ? 4
+    ViewSource := ReadBlob(1);      // BLOB SUB_TYPE 1 TEXT  ? 8
+    Description := ReadBlob(1);     // BLOB SUB_TYPE 1 TEXT  ? 8
+    //Inc(FDataPos, 8);               // skip 8
+  end
+  else // FireBird
+  begin
+    ViewBlr := ReadBlob(2);         // BLOB SUB_TYPE 2 BLR   ? 4
+    ViewSource := ReadBlob(1);      // BLOB SUB_TYPE 1 TEXT  ? 8
+    Description := ReadBlob(1);     // BLOB SUB_TYPE 1 TEXT  ? 8
+    Inc(FDataPos, 8);               // skip 8
+  end;
   RelationID := ReadInt(2);       // SMALLINT
   SystemFlag := ReadInt(2);       // SMALLINT
   DBKeyLen := ReadInt(2);         // SMALLINT
@@ -2505,39 +2634,70 @@ end;
 
 function TRDB_FormatsItem.FillFieldInfo(var AFieldInfo: TRDB_FieldInfoRec; AFieldIndex: Integer): Boolean;
 var
-  nPre, iPos: Integer;
+  nPre, iPos, iRecSize: Integer;
   FormatRec: TFBFormatRec;
   sData: AnsiString;
+  rdr: TRawDataReader;
 begin
   Result := False;
-  { DType: Byte;
-    Scale: Shortint;
-    Length: Word;
-    SubType: Word;  (codepage for CHAR)
-    Flags: Word;
-    Address: DWORD_PTR; }
 
   nPre := 2;
-  if Reader.OdsVersion = 11 then
+  iRecSize := 12;  // SizeOf(TFBFormatRec)
+  if (Reader.OdsVersion = 11) and Reader.IsInterBase then
+  begin
+    nPre := 0;
+    iRecSize := 16;
+  end
+  else
+  if (Reader.OdsVersion = 11) then
     nPre := 2
   else
   if Reader.OdsVersion = 12 then
     nPre := 4;
 
-  iPos := nPre + (AFieldIndex * SizeOf(FormatRec));
+  iPos := nPre + (AFieldIndex * iRecSize);
   sData := GetBlobValue(Descriptor);
-  if iPos + SizeOf(FormatRec) > Length(sData) then
+  if iPos + iRecSize > Length(sData) then
     Exit;
-  Move(sData[iPos+1], FormatRec, SizeOf(FormatRec));
+  //Move(sData[iPos+1], FormatRec, SizeOf(FormatRec));
+  //StrToFile(sData, 'test_s1.data');
+  rdr.Init(sData, iPos+1);
 
-  // Format
-  AFieldInfo.DType := FormatRec.DType;
+  // Format rec
+  {AFieldInfo.DType := FormatRec.DType;
   AFieldInfo.Scale := FormatRec.Scale;
   AFieldInfo.Length := FormatRec.Length;
   AFieldInfo.SubType := FormatRec.SubType;
   AFieldInfo.Flags := FormatRec.Flags;
-  AFieldInfo.Offset := FormatRec.Offset;
+  AFieldInfo.Offset := FormatRec.Offset;  }
   //
+  if Reader.IsInterBase and (Reader.OdsVersion = 11) then
+  begin
+    rdr.ReadUInt16;
+    rdr.ReadUInt8;
+    AFieldInfo.DType := rdr.ReadUInt8;
+    AFieldInfo.Scale := rdr.ReadInt16;
+    AFieldInfo.Length := rdr.ReadUInt16;
+    AFieldInfo.SubType := rdr.ReadUInt16;
+    AFieldInfo.Flags := rdr.ReadUInt32;
+    AFieldInfo.Offset := rdr.ReadUInt16;
+  end
+  else // FireBird
+  begin
+    { DType: Byte;
+      Scale: Shortint;
+      Length: Word;
+      SubType: Word;  (codepage for CHAR) For BLOB/TEXT and integers
+      Flags: Word;
+      Address: DWORD_PTR; Position from begining of row }
+    AFieldInfo.DType := rdr.ReadUInt8;
+    AFieldInfo.Scale := rdr.ReadInt8;
+    AFieldInfo.Length := rdr.ReadUInt16;
+    AFieldInfo.SubType := rdr.ReadUInt16;
+    AFieldInfo.Flags := rdr.ReadUInt16;
+    AFieldInfo.Offset := rdr.ReadUInt32;
+  end;
+
   //AFieldInfo.Size := FormatRec.Length;
   //AFieldInfo.FieldType := FormatRec.DType;
   //AFieldInfo.FieldSubType := FormatRec.SubType;
@@ -2550,12 +2710,12 @@ begin
 
     Reader.LogInfo(SysUtils.Format('FORMAT raw=%s  DType=%d(%d) Scale=%d Len=%d(%d) SubType=%d(%d) Flags=%d Offs=%d',
       [BufferToHex(sData[iPos+1], SizeOf(FormatRec)),
-      FormatRec.DType, AFieldInfo.FieldType,
-      FormatRec.Scale,
-      FormatRec.Length, AFieldInfo.FieldLength,
-      FormatRec.SubType, AFieldInfo.FieldSubType,
-      FormatRec.Flags,
-      FormatRec.Offset]
+      AFieldInfo.DType, AFieldInfo.FieldType,
+      AFieldInfo.Scale,
+      AFieldInfo.Length, AFieldInfo.FieldLength,
+      AFieldInfo.SubType, AFieldInfo.FieldSubType,
+      AFieldInfo.Flags,
+      AFieldInfo.Offset]
     ));
   end;
   Result := True;
@@ -2586,10 +2746,10 @@ end;
 
 procedure TRDB_RowsList.FillSysTableInfo(ARelID: Integer);
 begin
-  FillSysTableInfo_11(ARelID);
+  FillSysTableInfo_fb11(ARelID);
 end;
 
-procedure TRDB_RowsList.FillSysTableInfo_11(ARelID: Integer);
+procedure TRDB_RowsList.FillSysTableInfo_fb11(ARelID: Integer);
 var
   i: Integer;
   iAddr: Cardinal;
@@ -2705,6 +2865,245 @@ begin
   end;
 end;
 
+procedure TRDB_RowsList.FillSysTableInfo_ib10(ARelID: Integer);
+var
+  i: Integer;
+  iAddr: Cardinal;
+begin
+  // InterBase (ODS 10)
+  i := 0;
+  case ARelID of
+    0: // RDB$PAGES
+    begin
+      TableName := 'RDB$PAGES';
+      SetLength(FieldsInfo, 4);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'PAGE_NUMBER', DTYPE_LONG, 4, 0);
+      SetFieldInfo(i, iAddr, 'RELATION_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'PAGE_SEQUENCE', DTYPE_LONG, 4, 0);
+      SetFieldInfo(i, iAddr, 'PAGE_TYPE', DTYPE_SHORT, 2, 0);
+    end;
+    2: // RDB$FIELDS
+    begin
+      TableName := 'RDB$FIELDS';
+      SetLength(FieldsInfo, 28);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'FIELD_NAME', DTYPE_TEXT, 31, 3);        // CHAR(31)UTF8     t=14.3
+      SetFieldInfo(i, iAddr, 'QUERY_NAME', DTYPE_TEXT, 31, 3);        // CHAR(31)UTF8     FIELD_NAME
+      SetFieldInfo(i, iAddr, 'VALIDATION_BLR', DTYPE_BLOB, 8, 2);     // BLOB_2(8)        t=261 st=2
+      SetFieldInfo(i, iAddr, 'VALIDATION_SOURCE', DTYPE_BLOB, 8, 1);  // BLOB_TEXT(8)     SOURCE  t=261 st=1
+      SetFieldInfo(i, iAddr, 'COMPUTED_BLR', DTYPE_BLOB, 8, 2);       // BLOB_2(8)        VALUE   t=261 st=2
+      SetFieldInfo(i, iAddr, 'COMPUTED_SOURCE', DTYPE_BLOB, 8, 1);    // BLOB_TEXT(8)     SOURCE
+      SetFieldInfo(i, iAddr, 'DEFAULT_VALUE', DTYPE_BLOB, 8, 2);      // BLOB_2(8)        VALUE
+      SetFieldInfo(i, iAddr, 'DEFAULT_SOURCE', DTYPE_TEXT, 8, 1);     // BLOB_TEXT(8)     SOURCE
+      // pos
+      iAddr := 116;
+      SetFieldInfo(i, iAddr, 'FIELD_LENGHT', DTYPE_SHORT, 2, 0);      // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_SCALE', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_TYPE', DTYPE_SHORT, 2, 0);        // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_SUB_TYPE', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'MISSING_VALUE', DTYPE_BLOB, 8, 2);      // BLOB_2
+      SetFieldInfo(i, iAddr, 'MISSING_SOURCE', DTYPE_BLOB, 8, 1);     // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'DESCRIPTION', DTYPE_BLOB, 8, 1);        // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'SYSTEM_FLAG', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'QUERY_HEADER', DTYPE_BLOB, 8, 1);       // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'SEGMENT_LENGTH', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'EDIT_STRING', DTYPE_VARYNG, 125, 0);    // VARCHAR(125) + 3
+      Inc(iAddr, 1);
+      SetFieldInfo(i, iAddr, 'EXTERNAL_LENGTH', DTYPE_SHORT, 2, 0);   // SMALLINT
+      SetFieldInfo(i, iAddr, 'EXTERNAL_SCALE', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'EXTERNAL_TYPE', DTYPE_SHORT, 2, 0);     // SMALLINT
+      SetFieldInfo(i, iAddr, 'DIMENSIONS', DTYPE_SHORT, 2, 0);        // SMALLINT
+      SetFieldInfo(i, iAddr, 'NULL_FLAG', DTYPE_SHORT, 2, 0);         // SMALLINT
+      SetFieldInfo(i, iAddr, 'CHARACTER_LENGTH', DTYPE_SHORT, 2, 0);  // SMALLINT
+      SetFieldInfo(i, iAddr, 'COLLATION_ID', DTYPE_SHORT, 2, 0);      // SMALLINT
+      SetFieldInfo(i, iAddr, 'CHARACTER_SET_ID', DTYPE_SHORT, 2, 0);  // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_PRECISION', DTYPE_SHORT, 2, 0);   // SMALLINT
+    end;
+
+    5: // RDB$RELATION_FIELDS
+    begin
+      TableName := 'RDB$RELATION_FIELDS';
+      SetLength(FieldsInfo, 19);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'FIELD_NAME', DTYPE_TEXT, 31, 3);        // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'RELATION_NAME', DTYPE_TEXT, 31, 3);     // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'FIELD_SOURCE', DTYPE_TEXT, 31, 3);      // CHAR(31)UTF8  FIELD_NAME
+      SetFieldInfo(i, iAddr, 'QUERY_NAME', DTYPE_TEXT, 31, 3);        // CHAR(31)UTF8  FIELD_NAME
+      SetFieldInfo(i, iAddr, 'BASE_FIELD', DTYPE_TEXT, 31, 3);        // CHAR(31)UTF8  FIELD_NAME
+      SetFieldInfo(i, iAddr, 'EDIT_STRING', DTYPE_VARYNG, 127, 0);    // VARCHAR(125)
+      SetFieldInfo(i, iAddr, 'FIELD_POSITION', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'QUERY_HEADER', DTYPE_BLOB, 10, 1);      // BLOB_TEXT(8)  10
+      SetFieldInfo(i, iAddr, 'UPDATE_FLAG', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_ID', DTYPE_SHORT, 2, 0);          // SMALLINT
+      SetFieldInfo(i, iAddr, 'VIEW_CONTEXT', DTYPE_SHORT, 2, 0);      // SMALLINT
+      SetFieldInfo(i, iAddr, 'DESCRIPTION', DTYPE_BLOB, 10, 1);       // BLOB_TEXT(8)  10
+      SetFieldInfo(i, iAddr, 'DEFAULT_VALUE', DTYPE_BLOB, 8, 2);      // BLOB_BLR(8)
+      SetFieldInfo(i, iAddr, 'SYSTEM_FLAG', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'SECURITY_CLASS', DTYPE_TEXT, 31, 3);    // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'COMPLEX_NAME', DTYPE_TEXT, 31, 3);      // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'NULL_FLAG', DTYPE_SHORT, 2, 0);         // SMALLINT
+      SetFieldInfo(i, iAddr, 'DEFAULT_SOURCE', DTYPE_BLOB, 8, 1);     // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'COLLATION_ID', DTYPE_SHORT, 2, 0);      // SMALLINT
+    end;
+
+    6: // RDB$RELATIONS
+    begin
+      TableName := 'RDB$RELATIONS';
+      SetLength(FieldsInfo, 16);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'VIEW_BLR', DTYPE_BLOB, 8, 2);     // BLOB_BLR(8)
+      SetFieldInfo(i, iAddr, 'VIEW_SOURCE', DTYPE_BLOB, 8, 1);  // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'DESCRIPTION', DTYPE_BLOB, 8, 1);  // BLOB_TEXT(8)
+      //Inc(iAddr, 8);               // skip 8
+      SetFieldInfo(i, iAddr, 'RELATION_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'SYSTEM_FLAG', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'DBKEY_LENGTH', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'FORMAT', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'FIELD_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'RELATION_NAME', DTYPE_TEXT, 31, 3);     // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'SECURITY_CLASS', DTYPE_TEXT, 31, 3);    // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'EXTERNAL_FILE', DTYPE_VARYNG, 253, 0);  // VARCHAR(253)
+      Inc(iAddr, 1);               // skip
+      SetFieldInfo(i, iAddr, 'RUNTIME', DTYPE_BLOB, 8, 5);            // BLOB_5(8)
+      SetFieldInfo(i, iAddr, 'EXTERNAL_DESCRIPTION', DTYPE_BLOB, 8, 8); // BLOB_8(8)
+      SetFieldInfo(i, iAddr, 'OWNER_NAME', DTYPE_TEXT, 31, 3);        // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'DEFAULT_CLASS', DTYPE_TEXT, 31, 3);     // CHAR(31)UTF8
+      SetFieldInfo(i, iAddr, 'FLAGS', DTYPE_SHORT, 2, 0);             // unaligned ???
+    end;
+    8: // RDB$FORMATS
+    begin
+      TableName := 'RDB$FORMATS';
+      SetLength(FieldsInfo, 3);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'RELATION_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'FORMAT', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'DESCRIPTOR', DTYPE_BLOB, 8, 6);
+    end;
+  end;
+end;
+
+procedure TRDB_RowsList.FillSysTableInfo_ib11(ARelID: Integer);
+var
+  i: Integer;
+  iAddr: Cardinal;
+begin
+  // InterBase (ODS 11)
+  i := 0;
+  case ARelID of
+    0: // RDB$PAGES
+    begin
+      TableName := 'RDB$PAGES';
+      SetLength(FieldsInfo, 4);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'PAGE_NUMBER', DTYPE_LONG, 4, 0);
+      SetFieldInfo(i, iAddr, 'RELATION_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'PAGE_SEQUENCE', DTYPE_LONG, 4, 0);
+      SetFieldInfo(i, iAddr, 'PAGE_TYPE', DTYPE_SHORT, 2, 0);
+    end;
+    2: // RDB$FIELDS
+    begin
+      TableName := 'RDB$FIELDS';
+      SetLength(FieldsInfo, 28);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'FIELD_NAME', DTYPE_CSTRING, 67, 0);     // CHAR(67)     t=14 st=3
+      Inc(iAddr, 1);
+      SetFieldInfo(i, iAddr, 'QUERY_NAME', DTYPE_CSTRING, 67, 0);     // CHAR(67)     FIELD_NAME
+      Inc(iAddr, 1);
+      SetFieldInfo(i, iAddr, 'VALIDATION_BLR', DTYPE_BLOB, 8, 2);     // BLOB 2  8    t=261 st=2
+      SetFieldInfo(i, iAddr, 'VALIDATION_SOURCE', DTYPE_TEXT, 8, 1); // TEXT   8      SOURCE  t=261 st=1
+      SetFieldInfo(i, iAddr, 'COMPUTED_BLR', DTYPE_BLOB, 8, 2);       // BLOB 2  8    VALUE   t=261 st=2
+      SetFieldInfo(i, iAddr, 'COMPUTED_SOURCE', DTYPE_TEXT, 8, 1);   // TEXT   14    SOURCE
+      SetFieldInfo(i, iAddr, 'DEFAULT_VALUE', DTYPE_BLOB, 8, 2);      // BLOB 2       VALUE
+      SetFieldInfo(i, iAddr, 'DEFAULT_SOURCE', DTYPE_TEXT, 8, 1);    // TEXT    14   SOURCE
+      // pos 188
+      iAddr := 188;
+      SetFieldInfo(i, iAddr, 'FIELD_LENGHT', DTYPE_SHORT, 2, 0);      // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_SCALE', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_TYPE', DTYPE_SHORT, 2, 0);        // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_SUB_TYPE', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'MISSING_VALUE', DTYPE_BLOB, 4, 2);      // BLOB 2
+      SetFieldInfo(i, iAddr, 'MISSING_SOURCE', DTYPE_BLOB, 10, 1);    // BLOB TEXT  10
+      SetFieldInfo(i, iAddr, 'DESCRIPTION', DTYPE_BLOB, 10, 1);       // BLOB TEXT     10
+      SetFieldInfo(i, iAddr, 'SYSTEM_FLAG', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'QUERY_HEADER', DTYPE_TEXT, 14, 1);      // TEXT    14
+      SetFieldInfo(i, iAddr, 'SEGMENT_LENGTH', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'EDIT_STRING', DTYPE_VARYNG, 125, 0);    // VARCHAR(125) + 3
+      Inc(iAddr, 1);
+      SetFieldInfo(i, iAddr, 'EXTERNAL_LENGTH', DTYPE_SHORT, 2, 0);   // SMALLINT
+      SetFieldInfo(i, iAddr, 'EXTERNAL_SCALE', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'EXTERNAL_TYPE', DTYPE_SHORT, 2, 0);     // SMALLINT
+      SetFieldInfo(i, iAddr, 'DIMENSIONS', DTYPE_SHORT, 2, 0);        // SMALLINT
+      SetFieldInfo(i, iAddr, 'NULL_FLAG', DTYPE_SHORT, 2, 0);         // SMALLINT
+      SetFieldInfo(i, iAddr, 'CHARACTER_LENGTH', DTYPE_SHORT, 2, 0);  // SMALLINT
+      SetFieldInfo(i, iAddr, 'COLLATION_ID', DTYPE_SHORT, 2, 0);      // SMALLINT
+      SetFieldInfo(i, iAddr, 'CHARACTER_SET_ID', DTYPE_SHORT, 2, 0);  // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_PRECISION', DTYPE_SHORT, 2, 0);   // SMALLINT
+    end;
+
+    5: // RDB$RELATION_FIELDS
+    begin
+      TableName := 'RDB$RELATION_FIELDS';
+      SetLength(FieldsInfo, 19);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'FIELD_NAME', DTYPE_TEXT, 67, 3);        // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'RELATION_NAME', DTYPE_TEXT, 67, 3);     // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'FIELD_SOURCE', DTYPE_TEXT, 67, 3);      // CHAR(67)UTF8  FIELD_NAME
+      SetFieldInfo(i, iAddr, 'QUERY_NAME', DTYPE_TEXT, 67, 3);        // CHAR(67)UTF8  FIELD_NAME
+      SetFieldInfo(i, iAddr, 'BASE_FIELD', DTYPE_TEXT, 67, 3);        // CHAR(67)UTF8  FIELD_NAME
+      SetFieldInfo(i, iAddr, 'EDIT_STRING', DTYPE_VARYNG, 127, 0);    // VARCHAR(127) CP_0
+      SetFieldInfo(i, iAddr, 'FIELD_POSITION', DTYPE_SHORT, 2, 0);    // SMALLINT
+      SetFieldInfo(i, iAddr, 'QUERY_HEADER', DTYPE_BLOB, 8, 1);       // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'UPDATE_FLAG', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'FIELD_ID', DTYPE_SHORT, 2, 0);          // SMALLINT
+      SetFieldInfo(i, iAddr, 'VIEW_CONTEXT', DTYPE_SHORT, 2, 0);      // SMALLINT
+      SetFieldInfo(i, iAddr, 'DESCRIPTION', DTYPE_BLOB, 8, 1);        // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'DEFAULT_VALUE', DTYPE_BLOB, 8, 2);      // BLOB_BLR(8)
+      SetFieldInfo(i, iAddr, 'SYSTEM_FLAG', DTYPE_SHORT, 2, 0);       // SMALLINT
+      SetFieldInfo(i, iAddr, 'SECURITY_CLASS', DTYPE_TEXT, 67, 3);    // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'COMPLEX_NAME', DTYPE_TEXT, 67, 3);      // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'NULL_FLAG', DTYPE_SHORT, 2, 0);         // SMALLINT
+      SetFieldInfo(i, iAddr, 'DEFAULT_SOURCE', DTYPE_BLOB, 8, 1);     // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'COLLATION_ID', DTYPE_SHORT, 2, 0);      // SMALLINT
+    end;
+
+    6: // RDB$RELATIONS
+    begin
+      TableName := 'RDB$RELATIONS';
+      SetLength(FieldsInfo, 17);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'VIEW_BLR', DTYPE_BLOB, 8, 2);     // BLOB_BLR(8)
+      SetFieldInfo(i, iAddr, 'VIEW_SOURCE', DTYPE_BLOB, 8, 1);  // BLOB_TEXT(8)
+      SetFieldInfo(i, iAddr, 'DESCRIPTION', DTYPE_BLOB, 8, 1);  // BLOB_TEXT(8)
+      //Inc(iAddr, 8);               // skip 8
+      SetFieldInfo(i, iAddr, 'RELATION_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'SYSTEM_FLAG', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'DBKEY_LENGTH', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'FORMAT', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'FIELD_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'RELATION_NAME', DTYPE_TEXT, 67, 3);     // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'SECURITY_CLASS', DTYPE_TEXT, 67, 3);    // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'EXTERNAL_FILE', DTYPE_VARYNG, 255, 0);  // VARCHAR(253)
+      Inc(iAddr, 1);               // skip
+      SetFieldInfo(i, iAddr, 'RUNTIME', DTYPE_BLOB, 8, 5);            // BLOB_5(8)
+      SetFieldInfo(i, iAddr, 'EXTERNAL_DESCRIPTION', DTYPE_BLOB, 8, 8); // BLOB_8(8)
+      SetFieldInfo(i, iAddr, 'OWNER_NAME', DTYPE_TEXT, 67, 3);        // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'DEFAULT_CLASS', DTYPE_TEXT, 67, 3);     // CHAR(67)UTF8
+      SetFieldInfo(i, iAddr, 'FLAGS', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'RELATION_TYPE', DTYPE_CSTRING, 31, 0);  // CHAR(31)
+    end;
+    8: // RDB$FORMATS
+    begin
+      TableName := 'RDB$FORMATS';
+      SetLength(FieldsInfo, 3);
+      iAddr := 4;
+      SetFieldInfo(i, iAddr, 'RELATION_ID', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'FORMAT', DTYPE_SHORT, 2, 0);
+      SetFieldInfo(i, iAddr, 'DESCRIPTOR', DTYPE_BLOB, 8, 6);
+    end;
+  end;
+end;
+
 function TRDB_RowsList.GetItem(AIndex: Integer): TRDB_RowItem;
 begin
   Result := TRDB_RowItem(Get(AIndex));
@@ -2717,6 +3116,16 @@ begin
   FieldsInfo[AIndex].Length := ALen;
   FieldsInfo[AIndex].SubType := ASub;
   FieldsInfo[AIndex].Offset := AOffs;
+
+  // inherited FieldsDef
+  if Length(FieldsDef) <= AIndex then
+    SetLength(FieldsDef, AIndex+1);
+  FieldsDef[AIndex].Name := FieldsInfo[AIndex].Name;
+  FieldsDef[AIndex].TypeName := FieldsInfo[AIndex].AsString;
+  FieldsDef[AIndex].FieldType := FieldTypeToDbFieldType(FieldsInfo[AIndex].FieldType, FieldsInfo[AIndex].Length, FieldsInfo[AIndex].SubType);
+  FieldsDef[AIndex].Size := FieldsInfo[AIndex].GetSize;
+  FieldsDef[AIndex].RawOffset := AOffs;
+
   case AType of
     DTYPE_VARYNG: Inc(ALen, 2);
   end;
@@ -2753,12 +3162,13 @@ begin
   SetLength(Values, Length(TableInfo._FieldsInfo));
   for i := Low(TableInfo._FieldsInfo) to High(TableInfo._FieldsInfo) do
   begin
-    if IsNullValue(i) then
+    if (not Reader.IsInterBase) and IsNullValue(i) then
     begin
       Values[i] := Null;
+      // Interbase keep null values
       Continue;
     end;
-    
+
     dType := TableInfo._FieldsInfo[i].DType;
     if dType = 0 then
     begin
@@ -2773,14 +3183,21 @@ begin
         Values[i] := Null;
         Continue;
       end;
-    
+
       case dType of
         7: Values[i] := ReadInt(2); // SMALLINT
         8: Values[i] := ReadInt(4); // INTEGER
         //8: Values[i] := ReadInt64(); // INTEGER
         10: Values[i] := ReadFloat(); // FLOAT
         14: Values[i] := ReadChar(nLen); // CHAR
-        27: Values[i] := ReadInt64(); // INT64
+        16:
+        begin
+          if nSub = 1 then
+            Values[i] := ReadCurrency // CURRENCY
+          else
+            Values[i] := ReadInt64; // INT64
+        end;
+        27: Values[i] := ReadFloat(); // DOUBLE
         35: Values[i] := ReadDateTime(0, nSize); // DATETIME
         37: Values[i] := ReadVarChar(nLen, nSize); // VARCHAR
         261:
@@ -2808,7 +3225,7 @@ begin
         DTYPE_TEXT:
         begin
           // encoding?
-          if nSub = 0 then
+          if (nSub = 0) or (nSub = 3) then
             Values[i] := ReadChar(nLen)
           else
           begin
@@ -2837,17 +3254,37 @@ begin
         begin
           BlobRec := ReadBlob(nSub, nLen);
           if BlobRec.Data <> '' then
-            Values[i] := BlobRec.Data
+          begin
+            if Reader.IsInterBase then
+            begin
+              case nSub of
+                1: Values[i] := Copy(BlobRec.Data, 3, MaxInt); // TEXT  skip first 2 bytes
+              else
+                Values[i] := BlobRec.Data
+              end;
+            end
+            else
+              Values[i] := BlobRec.Data
+          end
           else
           if (BlobRec.RelID <> 0) then
             Values[i] := BlobRec.RowID;
         end;
         DTYPE_ARRAY:     Values[i] := '?ARRAY';
-        DTYPE_INT64:     Values[i] := ReadInt64; // 8 Int64
+        DTYPE_INT64:
+        begin
+          if nSub = 1 then
+            Values[i] := ReadCurrency // 8 Currency
+          else
+            Values[i] := ReadInt64; // 8 Int64
+        end;
       else
         Values[i] := Null;
       end;
     end;
+
+    if Reader.IsInterBase and IsNullValue(i) then
+      Values[i] := Null;
   end;
 
   // leave only null flags at beginning of row

@@ -109,6 +109,19 @@ type
     procedure AssignRowsList(ARowsList: TDbRowsList);
   end;
 
+  TRawDataReader = record
+    Data: AnsiString;
+    nPos: Integer;
+
+    procedure Init(AData: AnsiString; AStartPos: Integer = 0);
+    function ReadUInt8: Byte;
+    function ReadUInt16: Word;
+    function ReadUInt32: Cardinal;
+    function ReadInt8: ShortInt;
+    function ReadInt16: SmallInt;
+    function ReadInt32: Integer;
+  end;
+
 implementation
 
 type
@@ -356,6 +369,59 @@ begin
     exit;
   FCursor := Value;
   Resync([]);
+end;
+
+{ TRawDataReader }
+
+procedure TRawDataReader.Init(AData: AnsiString; AStartPos: Integer);
+begin
+  Data := AData;
+  if AStartPos = 0 then
+    nPos := 1
+  else
+    nPos := AStartPos;
+end;
+
+function TRawDataReader.ReadInt16: SmallInt;
+begin
+  Result := 0;
+  Move(Data[nPos], Result, SizeOf(Result));
+  Inc(nPos, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadInt32: Integer;
+begin
+  Result := 0;
+  Move(Data[nPos], Result, SizeOf(Result));
+  Inc(nPos, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadInt8: ShortInt;
+begin
+  Result := 0;
+  Move(Data[nPos], Result, SizeOf(Result));
+  Inc(nPos, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadUInt16: Word;
+begin
+  Result := 0;
+  Move(Data[nPos], Result, SizeOf(Result));
+  Inc(nPos, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadUInt32: Cardinal;
+begin
+  Result := 0;
+  Move(Data[nPos], Result, SizeOf(Result));
+  Inc(nPos, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadUInt8: Byte;
+begin
+  Result := 0;
+  Move(Data[nPos], Result, SizeOf(Result));
+  Inc(nPos, SizeOf(Result));
 end;
 
 end.
