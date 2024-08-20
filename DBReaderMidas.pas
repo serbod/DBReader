@@ -45,8 +45,11 @@ type
 
     function ReadInt(ASize: Byte): Integer;
     function ReadUInt(ASize: Byte): Cardinal;
-    function ReadBool(): Boolean;
+    function ReadBool(ASize: Byte): Boolean;
     function ReadFloat(): Double;
+    function ReadDate(): TDateTime;
+    function ReadTime(): TDateTime;
+    function ReadTimestamp(): TDateTime;
 
     function ReadProp(var AProp: TDSProp): Boolean;
     function ReadFieldDef(var AFieldDef: TDSFieldDef): Boolean;
@@ -174,7 +177,7 @@ end;
 procedure TDBReaderMidas.AfterConstruction;
 begin
   inherited;
-
+  FIsSingleTable := True;
 end;
 
 procedure TDBReaderMidas.BeforeDestruction;
@@ -232,6 +235,7 @@ end;
 
 function TDBReaderMidas.ReadFloat: Double;
 begin
+  Result := 0;
   FFile.ReadBuffer(Result, SizeOf(Result));
 end;
 
@@ -249,12 +253,19 @@ begin
   FFile.ReadBuffer(Result, ASize);
 end;
 
-function TDBReaderMidas.ReadBool: Boolean;
-var
-  bt: Byte;
+function TDBReaderMidas.ReadBool(ASize: Byte): Boolean;
 begin
-  FFile.ReadBuffer(bt, SizeOf(bt));
-  Result := (bt <> 0);
+  Result := (ReadInt(ASize) <> 0);
+end;
+
+function TDBReaderMidas.ReadDate: TDateTime;
+var
+  ts: TTimeStamp;
+begin
+  //Result := ReadInt(4) - 693594;  // Midas epoch
+  ts.Date := ReadInt(4);
+  ts.Time := 0;
+  Result := TimeStampToDateTime(ts);
 end;
 
 procedure TDBReaderMidas.ReadTable(AName: string; ACount: Int64; AList: TDbRowsList);
@@ -319,11 +330,23 @@ begin
         FIELD_TYPE_UINT:
           TmpRow.Values[i] := ReadUInt(FFieldsDef[i].FieldSize);
         FIELD_TYPE_BOOL:
-          TmpRow.Values[i] := ReadBool();
+          TmpRow.Values[i] := ReadBool(FFieldsDef[i].FieldSize);
         FIELD_TYPE_FLOAT:
           TmpRow.Values[i] := ReadFloat();
-
-        FIELD_TYPE_ZSTRING:
+        FIELD_TYPE_BCD:
+        begin
+          LogInfo(Format('Field %s type BCD not supported', [FFieldsDef[i].FieldName]));
+          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+        end;
+        FIELD_TYPE_DATE:
+          TmpRow.Values[i] := ReadDate();
+        FIELD_TYPE_TIME:
+          TmpRow.Values[i] := ReadTime();
+        FIELD_TYPE_TIMESTAMP:
+          TmpRow.Values[i] := ReadTimestamp();
+        FIELD_TYPE_ZSTRING,
+        FIELD_TYPE_UNICODE,
+        FIELD_TYPE_BYTES:
         begin
           if (FFieldsDef[i].FieldType and MASK_VARYNG_FLD) > 0 then
             sData := ReadVarSizeData(FFieldsDef[i].FieldSize)
@@ -334,6 +357,26 @@ begin
           TmpRow.Values[i] := sData;
           if not Assigned(AList) then
             LogInfo(Format('Field %s=%s', [FFieldsDef[i].FieldName, sData]));
+        end;
+        FIELD_TYPE_ADT:
+        begin
+          LogInfo(Format('Field %s type ADT not supported', [FFieldsDef[i].FieldName]));
+          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+        end;
+        FIELD_TYPE_ARRAY:
+        begin
+          LogInfo(Format('Field %s type ARRAY not supported', [FFieldsDef[i].FieldName]));
+          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+        end;
+        FIELD_TYPE_NESTED:
+        begin
+          LogInfo(Format('Field %s type NESTED not supported', [FFieldsDef[i].FieldName]));
+          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+        end;
+        FIELD_TYPE_REF:
+        begin
+          LogInfo(Format('Field %s type REFERENCE not supported', [FFieldsDef[i].FieldName]));
+          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
         end;
       else
         FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
@@ -348,6 +391,40 @@ begin
     Dec(ACount);
   end;
 
+end;
+
+function TDBReaderMidas.ReadTime: TDateTime;
+var
+  ts: TTimeStamp;
+begin
+  ts.Date := 1;
+  ts.Time := ReadInt(4);
+  Result := Frac(TimeStampToDateTime(ts));
+end;
+
+function TDBReaderMidas.ReadTimestamp: TDateTime;
+var
+  ts: TTimeStamp;
+begin
+  // Float type value of milliseconds
+  ts := MSecsToTimeStamp(ReadFloat);
+  Result := TimeStampToDateTime(ts);
+end;
+
+// Выдает HEX-строку содержимого буфера
+function BufferToHex(const Buffer; BufferSize: Integer): string;
+var
+  i: Integer;
+  pb: PByte;
+begin
+  Result := '';
+  pb := @Buffer;
+  for i := 0 to BufferSize - 1 do
+  begin
+    if i > 0 then Result := Result + ' ';
+    Result := Result + IntToHex(pb^, 2);
+    Inc(pb);
+  end;
 end;
 
 function TDBReaderMidas.ReadVarSizeData(ASize: Byte): AnsiString;
@@ -386,7 +463,7 @@ begin
   begin
     // array of PropSize
     iSize := 0;
-    FFile.ReadBuffer(iSize, AProp.PropSize);
+    FFile.ReadBuffer(iSize, SizeOf(Cardinal));
     FFile.Seek(iSize * AProp.PropSize, soFromCurrent);
   end
   else
@@ -399,7 +476,7 @@ begin
       iSize := ReadInt(AProp.PropSize);
     end;
     SetLength(AProp.PropData, iSize);
-    FFile.ReadBuffer(AProp.PropData[1], iSize);
+    FFile.ReadBuffer(AProp.PropData[0], iSize);
   end;
   Result := True;
 end;

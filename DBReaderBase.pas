@@ -53,6 +53,7 @@ type
   protected
     FFile: TFileStream;
     FOnLog: TGetStrProc;
+    FIsSingleTable: Boolean;
 
   public
     IsLogPages: Boolean;
@@ -70,6 +71,8 @@ type
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; virtual;
 
     property OnLog: TGetStrProc read FOnLog write FOnLog;
+    // detabase file contain single table
+    property IsSingleTable: Boolean read FIsSingleTable;
   end;
 
   TDbReaderDataSet = class(TDataSet)

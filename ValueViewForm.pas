@@ -142,7 +142,10 @@ begin
   if RawLen > 0 then
   begin
     memoHex.Text := s;
-    memoText.Text := DataAsStr(RawData[RawOffs+1], RawLen);
+    if RawOffs + 1 + RawLen > Length(RawData) then
+      memoText.Text := '<bad raw offset/length>'
+    else
+      memoText.Text := DataAsStr(RawData[RawOffs+1], RawLen);
   end
   else
   begin

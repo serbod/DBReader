@@ -79,6 +79,10 @@ object FormMain: TFormMain
     object tsGrid: TTabSheet
       Caption = 'Grid'
       ImageIndex = 1
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object dgItems: TDrawGrid
         Left = 0
         Top = 0
@@ -95,6 +99,10 @@ object FormMain: TFormMain
     object tsTableInfo: TTabSheet
       Caption = 'Table Info'
       ImageIndex = 2
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object memoInfo: TMemo
         AlignWithMargins = True
         Left = 4

@@ -18,6 +18,7 @@ type
   TMyTreeNode = class(TTreeNode)
   public
     TableName: string;
+    FileName: string;
   end;
 
   TGridMode = (gmTable, gmRecord);
@@ -52,10 +53,12 @@ type
     FCurRowIndex: Integer;
     FCurColIndex: Integer;
     FDbFileName: string;
+    FTableName: string;
     procedure OnLogHandler(const S: string);
-    function AddTreeNode(AParent: TTreeNode; AName, ATableName: string): TMyTreeNode;
+    function AddTreeNode(AParent: TTreeNode; AName, ATableName, AFileName: string): TMyTreeNode;
     function GetFieldColor(const AField: TDbFieldDefRec): TColor;
-    procedure FillTree();
+    procedure FillTreeFB();
+    procedure FillTreeByFiles(AFileName: string);
     procedure ShowTable(ATableName: string);
     procedure OpenFB(AFileName: string);
     procedure OpenBDB(AFileName: string);  // BerkleyDB (not tested)
@@ -77,10 +80,11 @@ implementation
 
 { TFormMain }
 
-function TFormMain.AddTreeNode(AParent: TTreeNode; AName, ATableName: string): TMyTreeNode;
+function TFormMain.AddTreeNode(AParent: TTreeNode; AName, ATableName, AFileName: string): TMyTreeNode;
 begin
   Result := TMyTreeNode.Create(tvMain.Items);
   Result.TableName := ATableName;
+  Result.FileName := AFileName;
   tvMain.Items.AddNode(Result, AParent, AName, nil, naAddChild);
 end;
 
@@ -194,6 +198,8 @@ begin
       else
       begin
         s := TmpRow.GetFieldAsStr(ARow-1);
+        if Length(s) > 100 then
+          s := Copy(s, 1, 100);
         clText := GetFieldColor(TmpField);
         // align numbers to right side
         if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat, ftCurrency] then
@@ -222,6 +228,8 @@ begin
         begin
           //s := VarToStrDef(TmpRow.Values[ACol], 'null');
           s := TmpRow.GetFieldAsStr(ACol);
+          if Length(s) > 100 then
+            s := Copy(s, 1, 100);
           clText := GetFieldColor(TmpField);
           // align numbers to right side
           if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat, ftCurrency] then
@@ -249,7 +257,47 @@ begin
   FCurColIndex := ACol;
 end;
 
-procedure TFormMain.FillTree;
+procedure TFormMain.FillTreeByFiles(AFileName: string);
+var
+  sr: TSearchRec;
+  sPath, sName, sCurName: string;
+  i: Integer;
+begin
+  sCurName := FTableName;
+  if Assigned(tvMain.Selected) then
+    sCurName := tvMain.Selected.Text;
+
+  sPath := ExtractFilePath(AFileName);
+  sName := sPath + '*' + ExtractFileExt(AFileName);
+  tvMain.Items.BeginUpdate;
+  tvMain.Items.Clear();
+  if SysUtils.FindFirst(sName, faAnyFile, sr) = 0 then
+  begin
+    repeat
+      if (sr.Attr and faAnyFile) > 0 then
+      begin
+        sName := sPath + sr.Name;
+        AddTreeNode(nil, sr.Name, sr.Name, sName);
+      end;
+    until FindNext(sr) <> 0;
+    FindClose(sr);
+  end;
+
+  for i := 0 to tvMain.Items.Count - 1 do
+  begin
+    if tvMain.Items[i].Text = sCurName then
+    begin
+      tvMain.OnChange := nil;
+      tvMain.Selected := tvMain.Items[i];
+      tvMain.OnChange := tvMainChange;
+      Break;
+    end;
+  end;
+
+  tvMain.Items.EndUpdate;
+end;
+
+procedure TFormMain.FillTreeFB;
 var
   tn, tnSys: TMyTreeNode;
   i: Integer;
@@ -259,13 +307,13 @@ begin
   tvMain.Items.BeginUpdate();
   tvMain.Items.Clear();
   // System tables
-  tnSys := AddTreeNode(nil, 'System tables', '');
+  tnSys := AddTreeNode(nil, 'System tables', '', '');
   for i := 0 to (FReader as TDBReaderFB).RelationsList.Count - 1 do
   begin
     TmpRel := (FReader as TDBReaderFB).RelationsList.GetItem(i) as TRDB_RelationsItem;
     if TmpRel.RelationID > 50 then
       Continue;
-    tn := AddTreeNode(tnSys, TmpRel.RelationName, TmpRel.RelationName);
+    tn := AddTreeNode(tnSys, TmpRel.RelationName, TmpRel.RelationName, '');
   end;
 
   // User tables
@@ -274,20 +322,25 @@ begin
     TmpRel := (FReader as TDBReaderFB).RelationsList.GetItem(i) as TRDB_RelationsItem;
     if TmpRel.RelationID < 50 then
       Continue;
-    tn := AddTreeNode(nil, TmpRel.RelationName, TmpRel.RelationName);
+    tn := AddTreeNode(nil, TmpRel.RelationName, TmpRel.RelationName, '');
   end;
 
   tvMain.Items.EndUpdate();
 end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
+var
+  s: string;
 begin
   memoLog.Clear();
   FRowsList := TRDB_RowsList.Create(TRDB_TableRowItem);
   MaxRows := MaxInt;
   //Test();
   if ParamCount > 0 then
-    OpenDB(ParamStr(1));
+  begin
+    s := ExpandFileName(ParamStr(1));
+    OpenDB(s);
+  end;
 end;
 
 procedure TFormMain.OnLogHandler(const S: string);
@@ -324,8 +377,10 @@ begin
   FReader.OnLog := OnLogHandler;
   FReader.OpenFile(AFileName);
 
-  tvMain.Items.Clear();
   ShowTable(ExtractFileName(AFileName));
+
+  // show other files from same path
+  FillTreeByFiles(AFileName);
 end;
 
 procedure TFormMain.OpenDB(AFileName: string);
@@ -371,7 +426,7 @@ begin
   //FReader.DebugRelID := 12;
   FReader.OpenFile(AFileName);
 
-  FillTree();
+  FillTreeFB();
 end;
 
 procedure TFormMain.OpenParadox(AFileName: string);
@@ -390,6 +445,7 @@ var
   TmpField: TDbFieldDefRec;
 begin
   memoInfo.Clear();
+  FTableName := ATableName;
   if ATableName = '' then
   begin
     tsGrid.Caption := 'Grid';
@@ -450,6 +506,8 @@ end;
 procedure TFormMain.tvMainChange(Sender: TObject; Node: TTreeNode);
 begin
   if not Assigned(Node) then Exit;
+  if FReader.IsSingleTable then
+    FReader.OpenFile((Node as TMyTreeNode).FileName);
   ShowTable((Node as TMyTreeNode).TableName);
 end;
 
