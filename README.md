@@ -6,6 +6,10 @@ Supported databases:
 * Firebird 2.1 up to 3.0 (.GDB, .FDB)
 * Midas.dll/DataSnap/ClientDataSet (.CDS)
 * Paradox 3.0 up to 7.x (.DB)
+* dBASE/FoxPRO (.DBF)
 
 Sample projects:
 * Database browser - browse tables and inpect values
+
+Dependencies:
+* DelphiZLib 1.2.8 (optional)

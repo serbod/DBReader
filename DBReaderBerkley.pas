@@ -28,6 +28,12 @@ type
     procedure BeforeDestruction(); override;
 
     function OpenFile(AFileName: string): Boolean; override;
+    // Read table data from DB to AList
+    // AName - table name
+    // ACount - how many items read
+    procedure ReadTable(AName: string; ACount: Int64 = MaxInt; AList: TDbRowsList = nil); override;
+    // get detailed multi-line description of table
+    function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; override;
   end;
 
 
@@ -124,6 +130,11 @@ begin
   inherited;
 end;
 
+function TDBReaderBerkley.FillTableInfoText(ATableName: string; ALines: TStrings): Boolean;
+begin
+
+end;
+
 function TDBReaderBerkley.OpenFile(AFileName: string): Boolean;
 var
   MetaHead: TBdbMetaPageHeader;
@@ -212,6 +223,12 @@ begin
     if nPage > 100 then
       break;
   end;
+end;
+
+procedure TDBReaderBerkley.ReadTable(AName: string; ACount: Int64; AList: TDbRowsList);
+begin
+  inherited;
+
 end;
 
 end.

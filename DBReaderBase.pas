@@ -57,6 +57,7 @@ type
 
   public
     IsLogPages: Boolean;
+    FileName: string;
 
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
@@ -214,6 +215,7 @@ begin
   Result := False;
   if not FileExists(AFileName) then Exit;
   FFile := TFileStream.Create(AFileName, fmOpenRead + fmShareDenyNone);
+  FileName := AFileName;
   Result := True;
 end;
 

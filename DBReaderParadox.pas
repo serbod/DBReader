@@ -123,7 +123,7 @@ const
 procedure TDBReaderParadox.AfterConstruction;
 begin
   inherited;
-
+  FIsSingleTable := True;
 end;
 
 procedure TDBReaderParadox.BeforeDestruction;

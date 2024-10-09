@@ -8,7 +8,9 @@ uses
   DBReaderBerkley in 'DBReaderBerkley.pas',
   DBReaderMidas in 'DBReaderMidas.pas',
   DBReaderParadox in 'DBReaderParadox.pas',
-  DBReaderBase in 'DBReaderBase.pas';
+  DBReaderBase in 'DBReaderBase.pas',
+  DBReaderGsr in 'DBReaderGsr.pas',
+  DBReaderDbf in 'DBReaderDbf.pas';
 
 {$R *.res}
 
