@@ -89,6 +89,15 @@ object FormRawValue: TFormRawValue
       TabOrder = 0
       OnClick = chkFullRawClick
     end
+    object chkValue: TCheckBox
+      Left = 236
+      Top = 26
+      Width = 97
+      Height = 17
+      Caption = 'Value'
+      TabOrder = 1
+      OnClick = chkValueClick
+    end
   end
   object panDataView: TPanel
     Left = 0

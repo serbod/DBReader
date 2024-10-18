@@ -6,6 +6,9 @@ DBF database file reader
 Author: Sergey Bodrov, 2024 Minsk
 License: MIT
 
+https://www.dbase.com/Knowledgebase/INT/db7_file_fmt.htm
+https://www.clicketyclick.dk/databases/xbase/format/
+
 *)
 
 interface
@@ -104,8 +107,12 @@ type
     //FRowsList: TDbRowsList;
     //FDbVersion: Integer;
     //FIsMetadataReaded: Boolean;        // true after FillTableInfo()
+    FMemoStream: TStream;
+    FMemoUnitSize: Integer;              // MemoPos = UnitNum * UnitSize
 
     function ReadString(const ARaw: AnsiString; AStart, ALen: Word): string;
+    // read optional MEMO data from raw position data
+    function ReadMemoData(const ARaw: AnsiString): AnsiString;
 
   public
     DbfHeader: TDbfHeaderRec;
@@ -127,6 +134,9 @@ type
   end;
 
 implementation
+
+const
+  DBF_MEMO_HEADER_SIZE = 512;
 
 function DbfFieldTypeToDbFieldType(AValue: AnsiChar): TFieldType;
 begin
@@ -191,10 +201,42 @@ function DbfCodepageName(AValue: Byte): string;
 begin
   case AValue of
     DBF_CODEPAGE_866:      Result := 'Codepage 866 Russian MS-DOS';
-    DBF_CODEPAGE_1251:     Result := 'Codepage 866 Russian Windows';
+    DBF_CODEPAGE_1251:     Result := 'Codepage 1251 Russian Windows';
   else
     Result := 'Unknown codepage (' + IntToStr(AValue) + ')';
   end;
+end;
+
+function DateStrToDate(AStr: string): TDateTime;
+var
+  i: Integer;
+  yy, mm, dd: Word;
+begin
+  // filter input
+  for i := Length(AStr)-1 downto 1 do
+  begin
+    if not (AStr[i] in ['0'..'9']) then
+      Delete(AStr, i, 1);
+  end;
+
+  yy := StrToIntDef(Copy(AStr, 1, 4), 1900);
+  if (yy < 1900) or (yy > 3000) then
+    yy := 1900;
+  mm := StrToIntDef(Copy(AStr, 5, 2), 1);
+  if (mm < 1) or (mm > 12) then
+    mm := 1;
+  dd := StrToIntDef(Copy(AStr, 7, 2), 1);
+  if (dd < 1) or (dd > 31) then
+    dd := 1;
+  Result := EncodeDate(yy, mm, dd);
+end;
+
+function SwapEndiness(AVal: Integer): Integer;
+begin
+  Result := (((AVal shr 0) and $FF) shl 24)
+         or (((AVal shr 8) and $FF) shl 16)
+         or (((AVal shr 16) and $FF) shl 8)
+         or (((AVal shr 24) and $FF) shl 0);
 end;
 
 { TDBReaderDbf }
@@ -209,17 +251,35 @@ end;
 procedure TDBReaderDbf.BeforeDestruction;
 begin
   //FreeAndNil(FRowsList);
+  FreeAndNil(FMemoStream);
   inherited;
 end;
 
 function TDBReaderDbf.FillTableInfoText(ATableName: string; ALines: TStrings): Boolean;
 var
-  i: Integer;
+  i, yy: Integer;
   s: string;
 begin
   Result := False;
-  ALines.Add(Format('== Table Name=%s  RecCount=%d', [TableName, DbfHeader.RecCount]));
-  ALines.Add(Format('LastUpdate=%.2d-%.2d-%.2d', [1900 + DbfHeader.LastUpdate[0], DbfHeader.LastUpdate[1], DbfHeader.LastUpdate[2]]));
+  // flags
+  s := '';
+  if (DbfHeader.TableFlags and DBF_FILE_FLAG_CDX) <> 0 then
+    s := s + 'CDX,';
+  if (DbfHeader.TableFlags and DBF_FILE_FLAG_MEMO) <> 0 then
+    s := s + 'MEMO,';
+  if (DbfHeader.TableFlags and DBF_FILE_FLAG_DBC) <> 0 then
+    s := s + 'DBC,';
+  if (DbfHeader.TableFlags and $F8) <> 0 then
+    s := s + IntToHex((DbfHeader.TableFlags and $F8), 2) + ',';
+
+  Delete(s, Length(s), 1);
+
+  yy := 1900;
+  if DbfHeader.LastUpdate[0] < 80 then
+    yy := 2000;
+
+  ALines.Add(Format('== Table Name=%s  RecCount=%d  Type=$%.2x  Flags=%s', [TableName, DbfHeader.RecCount, DbfHeader.FileType, s]));
+  ALines.Add(Format('LastUpdate=%.2d-%.2d-%.2d', [yy + DbfHeader.LastUpdate[0], DbfHeader.LastUpdate[1], DbfHeader.LastUpdate[2]]));
   ALines.Add(Format('Codepage=%s', [DbfCodepageName(DbfHeader.CodePage)]));
   ALines.Add(Format('== Fields  Count=%d', [Length(DbfFields)]));
   for i := Low(DbfFields) to High(DbfFields) do
@@ -240,8 +300,12 @@ function TDBReaderDbf.OpenFile(AFileName: string): Boolean;
 var
   DbfField: TDbfFieldSubRec;
   n, nOffs: Integer;
-  FieldPos: Int64;
+  s: string;
 begin
+  FreeAndNil(FMemoStream);
+  SetLength(DbfFields, 0);
+  FillChar(DbfHeader, SizeOf(DbfHeader), #0);
+
   Result := inherited OpenFile(AFileName);
   if not Result then Exit;
   TableName := ExtractFileName(AFileName);
@@ -250,10 +314,10 @@ begin
   FFile.Position := 0;
   FFile.Read(DbfHeader, SizeOf(DbfHeader));
   // read field defs
-  nOffs := 0;
+  nOffs := 1; // skip rec state byte
   while FFile.Position + SizeOf(DbfField) < DbfHeader.FirstRowOffs do
   begin
-    FieldPos := FFile.Position;
+    //FieldPos := FFile.Position;
     FFile.Read(DbfField, SizeOf(DbfField));
     if DbfField.Name[0] = #$0D then
       Break;
@@ -267,17 +331,91 @@ begin
     if DbfFields[n].FieldOffs = 0 then
       DbfFields[n].FieldOffs := nOffs;
     Inc(nOffs, DbfField.FieldLen);
-    // ???
-    if (DbfFields[n].FieldType = DBF_FIELD_TYPE_CHAR) and (DbfField.FieldLen = 1) then
-      Inc(nOffs);
+  end;
+
+  // read memo data (optional)
+  s := Copy(AFileName, 1, Length(AFileName)-4) + '.fpt';
+  if FileExists(s) then
+  begin
+    FMemoStream := TFileStream.Create(s, fmOpenRead + fmShareDenyNone);
+    FMemoStream.Position := 4;
+    FMemoStream.Read(FMemoUnitSize, SizeOf(FMemoUnitSize));
+    FMemoUnitSize := SwapEndiness(FMemoUnitSize);
+    if FMemoUnitSize < 10 then
+      FMemoUnitSize := DBF_MEMO_HEADER_SIZE;
+  end;
+end;
+
+function TDBReaderDbf.ReadMemoData(const ARaw: AnsiString): AnsiString;
+var
+  nNum, nPos: Int64;
+  sData: AnsiString;
+  nMarker: LongWord; // UInt32
+  iLen: LongInt; // Int32
+begin
+  Result := '';
+  if not Assigned(FMemoStream) then Exit;
+  nNum := 0;
+  if (Length(ARaw) > 0) and (Length(ARaw) <= 4) then
+  begin
+    System.Move(ARaw[1], nNum, Length(ARaw));
+    //nNum := Swap(nNum);
+  end;
+  //nNum := StrToIntDef(ARaw, 0);
+
+  if nNum > 0 then
+  begin
+    nPos := nNum * FMemoUnitSize;
+    while nPos + FMemoUnitSize < FMemoStream.Size do
+    begin
+      FMemoStream.Position := nPos;
+      SetLength(sData, FMemoUnitSize);
+      FMemoStream.Read(sData[1], FMemoUnitSize);
+      nMarker := 0;
+      System.Move(sData[1], nMarker, SizeOf(nMarker));
+      nMarker := SwapEndiness(nMarker);
+      if (nMarker = $0008FFFF) or (nMarker = 1) then
+      begin
+        // dBase4 block: <marker> <size> <data>
+        // Type_$30: <1> <size> <data>
+        System.Move(sData[5], iLen, SizeOf(iLen));
+        iLen := SwapEndiness(iLen);
+        if (iLen > 0) and ((nPos + 8 + iLen) < FMemoStream.Size) then
+        begin
+          FMemoStream.Position := nPos + 8;
+          SetLength(Result, iLen);
+          FMemoStream.Read(Result[1], iLen);
+          Exit;
+        end;
+        //if iLen > (FMemoBlockSize - 8) then
+        //  iLen := (FMemoBlockSize - 8);
+        //Result := Result + Copy(sData, 9, iLen-1);
+        //if iLen < (FMemoBlockSize - 8) then
+        //  Exit;
+      end
+      else
+      begin
+        // dBase3 block: <data> <$1A $1A>
+        iLen := Pos(#$1A#$1A, sData);
+        if iLen > 0 then
+        begin
+          Result := Result + Copy(sData, 1, iLen-1);
+          Exit;
+        end
+        else
+          Result := Result + sData;
+      end;
+      //Inc(nPos, FMemoUnitSize);
+      nPos := FMemoStream.Position;
+    end;
   end;
 end;
 
 function TDBReaderDbf.ReadString(const ARaw: AnsiString; AStart, ALen: Word): string;
 begin
   SetLength(Result, ALen);
-  System.Move(ARaw[AStart+1], Result[1], ALen);
-  Result := TrimRight(Result);
+  if ALen > 0 then
+    System.Move(ARaw[AStart+1], Result[1], ALen);
 
   if (DbfHeader.CodePage = DBF_CODEPAGE_866) and (Result <> '') then
     OemToChar(PChar(Result), PChar(Result));
@@ -291,6 +429,7 @@ var
 begin
   inherited;
   AList.Clear;
+  AList.TableName := AName;
 
   // set field defs
   SetLength(AList.FieldsDef, Length(DbfFields));
@@ -299,6 +438,8 @@ begin
     AList.FieldsDef[i].Name := DbfFields[i].Name;
     AList.FieldsDef[i].TypeName := DbfFieldTypeName(DbfFields[i].FieldType, DbfFields[i].FieldLen, DbfFields[i].FieldFlags);
     AList.FieldsDef[i].FieldType := DbfFieldTypeToDbFieldType(DbfFields[i].FieldType);
+    AList.FieldsDef[i].Size := DbfFields[i].FieldLen;
+    AList.FieldsDef[i].RawOffset := DbfFields[i].FieldOffs;
   end;
 
   FFile.Position := DbfHeader.FirstRowOffs;
@@ -311,22 +452,48 @@ begin
     SetLength(TmpRow.RawData, DbfHeader.RecLength);
     FFile.Read(TmpRow.RawData[1], DbfHeader.RecLength);
 
+    if TmpRow.RawData[1] = DBF_REC_STATE_DELETED then
+    begin
+      // deleted
+      AList.Remove(TmpRow);
+      Continue;
+    end;
+
     SetLength(TmpRow.Values, Length(DbfFields));
     for i := 0 to Length(DbfFields) - 1 do
     begin
       // read field
       s := ReadString(TmpRow.RawData, DbfFields[i].FieldOffs, DbfFields[i].FieldLen);
+      if Trim(s) = '' then
+      begin
+        case DbfFields[i].FieldType of
+          DBF_FIELD_TYPE_CURRENCY,
+          DBF_FIELD_TYPE_NUMERIC,
+          DBF_FIELD_TYPE_FLOAT,
+          DBF_FIELD_TYPE_DOUBLE,
+          DBF_FIELD_TYPE_DATE,
+          DBF_FIELD_TYPE_DATETIME,
+          DBF_FIELD_TYPE_INTEGER,
+          DBF_FIELD_TYPE_BOOL,
+          DBF_FIELD_TYPE_GENERAL:
+          begin
+            TmpRow.Values[i] := Null;
+            Continue;
+          end;
+        end;
+      end;
+
       case DbfFields[i].FieldType of
-        DBF_FIELD_TYPE_CHAR:     TmpRow.Values[i] := s;
+        DBF_FIELD_TYPE_CHAR:     TmpRow.Values[i] := TrimRight(s);
         DBF_FIELD_TYPE_CURRENCY: TmpRow.Values[i] := StrToCurrDef(Trim(s), 0);
         DBF_FIELD_TYPE_NUMERIC,
         DBF_FIELD_TYPE_FLOAT,
         DBF_FIELD_TYPE_DOUBLE:   TmpRow.Values[i] := StrToFloatDef(Trim(s), 0);
-        DBF_FIELD_TYPE_DATE:     TmpRow.Values[i] := StrToDateDef(Trim(s), 0);
+        DBF_FIELD_TYPE_DATE:     TmpRow.Values[i] := DateStrToDate(Trim(s));
         DBF_FIELD_TYPE_DATETIME: TmpRow.Values[i] := StrToDateTimeDef(Trim(s), 0);
         DBF_FIELD_TYPE_INTEGER:  TmpRow.Values[i] := StrToIntDef(Trim(s), 0);
         DBF_FIELD_TYPE_BOOL:     TmpRow.Values[i] := (Trim(s) = 'T');
-        DBF_FIELD_TYPE_MEMO:     TmpRow.Values[i] := s;
+        DBF_FIELD_TYPE_MEMO:     TmpRow.Values[i] := ReadMemoData(s);
         DBF_FIELD_TYPE_GENERAL:  TmpRow.Values[i] := s;
       end;
     end;

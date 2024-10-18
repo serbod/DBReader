@@ -19,11 +19,14 @@ type
     chkFullRaw: TCheckBox;
     lbRawOffsText: TLabel;
     lbRawOffs: TLabel;
+    chkValue: TCheckBox;
     procedure chkFullRawClick(Sender: TObject);
+    procedure chkValueClick(Sender: TObject);
   private
     { Private declarations }
   public
     { Public declarations }
+    Value: Variant;
     RawData: AnsiString;   // Whole data string
     RawOffs: Integer;      // value offset (0-based)
     RawLen: Integer;       // value length
@@ -77,6 +80,11 @@ end;
 { TFormRawValue }
 
 procedure TFormRawValue.chkFullRawClick(Sender: TObject);
+begin
+  UpdateView();
+end;
+
+procedure TFormRawValue.chkValueClick(Sender: TObject);
 begin
   UpdateView();
 end;
@@ -151,6 +159,11 @@ begin
   begin
     memoHex.Text := '';
     memoText.Text := '';
+  end;
+
+  if chkValue.Checked then
+  begin
+    memoText.Text := VarToStr(Value);
   end;
 end;
 

@@ -12,7 +12,8 @@ interface
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB,
-  DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox;
+  DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
+  DBReaderGsr, DBReaderDbf;
 
 type
   TMyTreeNode = class(TTreeNode)
@@ -64,6 +65,8 @@ type
     procedure OpenBDB(AFileName: string);  // BerkleyDB (not tested)
     procedure OpenCDS(AFileName: string);
     procedure OpenParadox(AFileName: string);
+    procedure OpenGsr(AFileName: string);
+    procedure OpenDbf(AFileName: string);
   public
     { Public declarations }
     MaxRows: Integer;
@@ -122,10 +125,12 @@ begin
     TmpRow := FRowsList.GetItem(FCurRowIndex);
     if Assigned(TmpRow) then
     begin
+      FormRawValue.Value := Null;
       if FCurColIndex < Length(TmpRow.Values) then
       begin
         //s := VarToStrDef(TmpRow.Values[ACol], 'null');
         //s := TmpRow.GetFieldAsStr(FCurRowIndex);
+        FormRawValue.Value := TmpRow.Values[FCurColIndex];
       end;
       FormRawValue.FieldName := TmpField.Name;
       if TmpField.FieldType <> ftUnknown then
@@ -411,10 +416,28 @@ begin
       OpenCDS(FDbFileName)
     else
     if (sExt = '.db') then
-      OpenParadox(FDbFileName);
+      OpenParadox(FDbFileName)
+    else
+    if (sExt = '.gsr') then
+      OpenGsr(FDbFileName)
+    else
+    if (sExt = '.dbf') then
+      OpenDbf(FDbFileName);
   finally
     memoLog.Lines.EndUpdate();
   end;
+end;
+
+procedure TFormMain.OpenDbf(AFileName: string);
+begin
+  FReader := TDBReaderDbf.Create(Self);
+  FReader.OnLog := OnLogHandler;
+  FReader.OpenFile(AFileName);
+
+  ShowTable((FReader as TDBReaderDbf).TableName);
+
+  // show other files from same path
+  FillTreeByFiles(AFileName);
 end;
 
 procedure TFormMain.OpenFB(AFileName: string);
@@ -427,6 +450,43 @@ begin
   FReader.OpenFile(AFileName);
 
   FillTreeFB();
+end;
+
+procedure TFormMain.OpenGsr(AFileName: string);
+var
+  tn, tnSys: TMyTreeNode;
+  i: Integer;
+  TmpTable: TGsrTable;
+begin
+  FReader := TDBReaderGsr.Create(Self);
+  FReader.OnLog := OnLogHandler;
+  try
+    FReader.OpenFile(AFileName);
+  except
+    on E: Exception do
+      memoInfo.Lines.Append(E.Message);
+  end;
+
+  // Fill tree
+  tvMain.Items.BeginUpdate();
+  tvMain.Items.Clear();
+  // tables
+  for i := 0 to (FReader as TDBReaderGsr).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderGsr).TableList.GetItem(i);
+    if TmpTable.RowCount > 0 then
+      tn := AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // Empty tables
+  tnSys := AddTreeNode(nil, 'Empty tables', '', '');
+  for i := 0 to (FReader as TDBReaderGsr).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderGsr).TableList.GetItem(i);
+    if TmpTable.RowCount > 0 then
+      Continue;
+    tn := AddTreeNode(tnSys, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  tvMain.Items.EndUpdate();
 end;
 
 procedure TFormMain.OpenParadox(AFileName: string);
