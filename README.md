@@ -7,6 +7,7 @@ Supported databases:
 * Midas.dll/DataSnap/ClientDataSet (.CDS)
 * Paradox 3.0 up to 7.x (.DB)
 * dBASE/FoxPRO (.DBF)
+* MS SQL Server (.MDF, .BAK)
 
 Sample projects:
 * Database browser - browse tables and inpect values

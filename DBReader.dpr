@@ -1,4 +1,4 @@
-program DbBrowser;
+program DBReader;
 
 uses
   Forms,
@@ -10,7 +10,9 @@ uses
   DBReaderParadox in 'DBReaderParadox.pas',
   DBReaderBase in 'DBReaderBase.pas',
   DBReaderGsr in 'DBReaderGsr.pas',
-  DBReaderDbf in 'DBReaderDbf.pas';
+  DBReaderDbf in 'DBReaderDbf.pas',
+  FSReaderMtf in 'FSReaderMtf.pas',
+  DBReaderMdf in 'DBReaderMdf.pas';
 
 {$R *.res}
 

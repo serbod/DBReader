@@ -122,7 +122,7 @@ type
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
 
-    function OpenFile(AFileName: string): Boolean; override;
+    function OpenFile(AFileName: string; AStream: TStream = nil): Boolean; override;
     // Read table data from DB to AList
     // AName - table name
     // ACount - how many items read
@@ -296,7 +296,7 @@ begin
   end;
 end;
 
-function TDBReaderDbf.OpenFile(AFileName: string): Boolean;
+function TDBReaderDbf.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   DbfField: TDbfFieldSubRec;
   n, nOffs: Integer;
@@ -306,7 +306,7 @@ begin
   SetLength(DbfFields, 0);
   FillChar(DbfHeader, SizeOf(DbfHeader), #0);
 
-  Result := inherited OpenFile(AFileName);
+  Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
   TableName := ExtractFileName(AFileName);
 

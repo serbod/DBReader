@@ -27,7 +27,7 @@ type
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
 
-    function OpenFile(AFileName: string): Boolean; override;
+    function OpenFile(AFileName: string; AStream: TStream = nil): Boolean; override;
     // Read table data from DB to AList
     // AName - table name
     // ACount - how many items read
@@ -135,7 +135,7 @@ begin
 
 end;
 
-function TDBReaderBerkley.OpenFile(AFileName: string): Boolean;
+function TDBReaderBerkley.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   MetaHead: TBdbMetaPageHeader;
   PageHead: TBdbPageHeader;
@@ -148,9 +148,8 @@ var
   eOver: TOverEntryRec;
   eIntern: TInternEntryRec;
 begin
-  Result := False;
-  if not FileExists(AFileName) then Exit;
-  FFile := TFileStream.Create(AFileName, fmOpenRead + fmShareDenyNone);
+  Result := inherited OpenFile(AFileName, AStream);
+  if not Result then Exit;
 
   // read header page
   FFile.Read(MetaHead, SizeOf(MetaHead));

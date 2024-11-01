@@ -13,7 +13,7 @@ uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
-  DBReaderGsr, DBReaderDbf;
+  DBReaderGsr, DBReaderDbf, FSReaderMtf, DBReaderMdf;
 
 type
   TMyTreeNode = class(TTreeNode)
@@ -67,6 +67,8 @@ type
     procedure OpenParadox(AFileName: string);
     procedure OpenGsr(AFileName: string);
     procedure OpenDbf(AFileName: string);
+    procedure OpenTape(AFileName: string);
+    procedure OpenMdf(AFileName: string; AStream: TStream = nil);
   public
     { Public declarations }
     MaxRows: Integer;
@@ -408,6 +410,7 @@ begin
 
   memoLog.Lines.BeginUpdate();
   memoLog.Lines.Clear();
+  FreeAndNil(FReader);
   try
     if (sExt = '.gdb') or (sExt = '.fdb') then
       OpenFB(FDbFileName)
@@ -422,7 +425,13 @@ begin
       OpenGsr(FDbFileName)
     else
     if (sExt = '.dbf') then
-      OpenDbf(FDbFileName);
+      OpenDbf(FDbFileName)
+    else
+    if (sExt = '.bak') then
+      OpenTape(FDbFileName)
+    else
+    if (sExt = '.mdf') then
+      OpenMdf(FDbFileName);
   finally
     memoLog.Lines.EndUpdate();
   end;
@@ -489,6 +498,43 @@ begin
   tvMain.Items.EndUpdate();
 end;
 
+procedure TFormMain.OpenMdf(AFileName: string; AStream: TStream);
+var
+  tn, tnSys: TMyTreeNode;
+  i: Integer;
+  TmpTable: TMdfTable;
+begin
+  FReader := TDBReaderMdf.Create(Self);
+  FReader.OnLog := OnLogHandler;
+  try
+    FReader.OpenFile(AFileName, AStream);
+  except
+    on E: Exception do
+      memoInfo.Lines.Append(E.Message);
+  end;
+
+  // Fill tree
+  tvMain.Items.BeginUpdate();
+  tvMain.Items.Clear();
+  // tables
+  for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
+    if TmpTable.ObjectID > 100 then
+      tn := AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // Empty tables
+  tnSys := AddTreeNode(nil, 'System tables', '', '');
+  for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
+    if TmpTable.ObjectID > 100 then
+      Continue;
+    tn := AddTreeNode(tnSys, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  tvMain.Items.EndUpdate();
+end;
+
 procedure TFormMain.OpenParadox(AFileName: string);
 begin
   FReader := TDBReaderParadox.Create(Self);
@@ -497,6 +543,25 @@ begin
 
   tvMain.Items.Clear();
   ShowTable((FReader as TDBReaderParadox).TableName);
+end;
+
+procedure TFormMain.OpenTape(AFileName: string);
+var
+  r: TFSReaderMtf;
+  ifs: TInnerFileStream;
+begin
+  r := TFSReaderMtf.Create();
+  try
+    r.OnLog := OnLogHandler;
+    r.OpenFile(AFileName);
+    if r.MdfPos > 0 then
+    begin
+      ifs := TInnerFileStream.Create(AFileName, r.MdfName, r.MdfPos, r.MdfSize);
+      OpenMdf(r.MdfName, ifs);
+    end;
+  finally
+    r.Free();
+  end;
 end;
 
 procedure TFormMain.ShowTable(ATableName: string);
@@ -515,6 +580,9 @@ begin
   end
   else
   begin
+    // table info
+    FReader.FillTableInfoText(ATableName, memoInfo.Lines);
+
     tsGrid.Caption := ATableName;
     if FRowsList.TableName <> ATableName then
     begin
@@ -541,9 +609,6 @@ begin
       else
         dgItems.ColWidths[i] := 100;
     end;
-
-    // table info
-    FReader.FillTableInfoText(ATableName, memoInfo.Lines);
   end;
 
   dgItems.FixedCols := 0;

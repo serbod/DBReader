@@ -58,7 +58,7 @@ type
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
 
-    function OpenFile(AFileName: string): Boolean; override;
+    function OpenFile(AFileName: string; AStream: TStream = nil): Boolean; override;
     // Read table data from DB to AList
     // AName - table name
     // ACount - how many items read
@@ -285,7 +285,7 @@ begin
 
   if Assigned(AList) then
   begin
-    AList.TableName := ExtractFileName(FFile.FileName);
+    AList.TableName := ExtractFileName(FileName);
     SetLength(AList.FieldsDef, FColCount);
     for i := 0 to FColCount - 1 do
     begin
@@ -514,7 +514,7 @@ begin
   Result := True;
 end;
 
-function TDBReaderMidas.OpenFile(AFileName: string): Boolean;
+function TDBReaderMidas.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   //RawData: array [0..2047] of Byte;
   PktHead: TDSPacketHeader;
@@ -522,7 +522,7 @@ var
   iPropsCount: Word;
   i: Integer;
 begin
-  Result := inherited OpenFile(AFileName);
+  Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
   Result := False;
 

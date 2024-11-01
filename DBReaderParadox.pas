@@ -38,7 +38,7 @@ type
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
 
-    function OpenFile(AFileName: string): Boolean; override;
+    function OpenFile(AFileName: string; AStream: TStream = nil): Boolean; override;
     // Read table data from DB to AList
     // AName - table name
     // ACount - how many items read
@@ -132,14 +132,14 @@ begin
 
 end;
 
-function TDBReaderParadox.OpenFile(AFileName: string): Boolean;
+function TDBReaderParadox.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   RawData: TByteArray;
   FileHead: TPdxFileHeader;
   i, iFieldOffs: Integer;
   FieldInfo: TPdxFieldInfo;
 begin
-  Result := inherited OpenFile(AFileName);
+  Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
   Result := False;
 

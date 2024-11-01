@@ -78,7 +78,7 @@ type
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
 
-    function OpenFile(AFileName: string): Boolean; override;
+    function OpenFile(AFileName: string; AStream: TStream = nil): Boolean; override;
     // Read table data from DB to AList
     // AName - table name
     // ACount - how many items read
@@ -229,7 +229,7 @@ begin
   end;
 end;
 
-function TDBReaderGsr.OpenFile(AFileName: string): Boolean;
+function TDBReaderGsr.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   i, n: Integer;
 begin
@@ -239,20 +239,6 @@ begin
   FZip.Open(AFileName);
   try
     // read metadata
-    {
-    n := FZip.Entries.IndexOf('sr5.xml');
-    if n >= 0 then
-    begin
-      FDataFile := TTmpFileStream.Create();
-      try
-        FZip.ExtractToStream(FZip.Entries.Items[n], FDataFile);
-        ReadXmlData(FDataFile);
-        FIsMetadataReaded := True;
-      finally
-        FreeAndNil(FDataFile);
-      end;
-    end;
-    }
     if not Assigned(FDataFile) then
       //FDataFile := TTmpFileStream.Create();
       FDataFile := TMemStream.Create();
@@ -266,6 +252,22 @@ begin
         FZip.ExtractToStream(FZip.Entries.Items[i], FDataFile);
         ReadMetaFile(FDataFile);
         FIsMetadataReaded := True;
+      end;
+    end;
+
+    if not FIsMetadataReaded then
+    begin
+      n := FZip.Entries.IndexOf('sr5.xml');
+      if n >= 0 then
+      begin
+        FDataFile := TTmpFileStream.Create();
+        try
+          FZip.ExtractToStream(FZip.Entries.Items[n], FDataFile);
+          ReadXmlData(FDataFile);
+          FIsMetadataReaded := True;
+        finally
+          FreeAndNil(FDataFile);
+        end;
       end;
     end;
 

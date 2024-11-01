@@ -1,7 +1,7 @@
 object FormMain: TFormMain
   Left = 0
   Top = 0
-  Caption = 'Database file browser'
+  Caption = 'Database file reader'
   ClientHeight = 474
   ClientWidth = 792
   Color = clBtnFace
@@ -157,7 +157,7 @@ object FormMain: TFormMain
     FileTypes = <
       item
         DisplayName = 'Database files'
-        FileMask = '*.gdb;*.fdb;*.cds;*.db'
+        FileMask = '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf'
       end
       item
         DisplayName = 'Interbase/Firebird files (*.gdb, *.fdb)'
@@ -170,6 +170,14 @@ object FormMain: TFormMain
       item
         DisplayName = 'Paradox files (*.db)'
         FileMask = '*.db'
+      end
+      item
+        DisplayName = 'Mapsoft GSR files (*.gsr)'
+        FileMask = '*.gsr'
+      end
+      item
+        DisplayName = 'DBF (*.dbf)'
+        FileMask = '*.dbf'
       end
       item
         DisplayName = 'All files (*.*)'

@@ -286,7 +286,7 @@ type
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
 
-    function OpenFile(AFileName: string): Boolean; override;
+    function OpenFile(AFileName: string; AStream: TStream = nil): Boolean; override;
 
     // Read table data from DB to AList
     // AName - table name
@@ -668,22 +668,6 @@ begin
   end;
 end;
 
-procedure StrToFile(AStr: AnsiString; AFileName: string);
-var
-  fs: TFileStream;
-begin
-  if AStr = '' then Exit;
-  if FileExists(AFileName) then
-    DeleteFile(AFileName);
-
-  fs := TFileStream.Create(AFileName, fmCreate);
-  try
-    fs.Write(AStr[1], Length(AStr));
-  finally
-    fs.Free();
-  end;
-end;
-
 function DataAsStr(const AData; ALen: Integer): string;
 var
   i: Integer;
@@ -697,38 +681,6 @@ begin
   begin
     if Ord(Result[i]) < 32 then
       Result[i] := '.';
-  end;
-end;
-
-// Выдает HEX-строку содержимого буфера
-function BufferToHex(const Buffer; BufferSize: Integer): string;
-var
-  i: Integer;
-  pb: PByte;
-begin
-  Result := '[';
-  pb := @Buffer;
-  for i := 0 to BufferSize - 1 do
-  begin
-    if i > 0 then Result := Result + ' ';
-    Result := Result + IntToHex(pb^, 2);
-    Inc(pb);
-  end;
-  Result := Result + ']';
-end;
-
-// Выдает HEX-строку содержимого буфера, заглавными буквами без пробелов
-function BufToHex(const Buffer; BufferSize: Integer): string;
-var
-  i: Integer;
-  pb: PByte;
-begin
-  Result := '';
-  pb := @Buffer;
-  for i := 0 to BufferSize - 1 do
-  begin
-    Result := Result + IntToHex(pb^, 2);
-    Inc(pb);
   end;
 end;
 
@@ -1451,7 +1403,7 @@ begin
   end;
 end;
 
-function TDBReaderFB.OpenFile(AFileName: string): Boolean;
+function TDBReaderFB.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   i, nPage, iOffs, iDataHeadLen, iDataOffs, iDataLen: Integer;
   iLen, iPageIndex: Integer;
@@ -1471,7 +1423,7 @@ var
   TmpPageItem: TRDB_PagesItem;
   BlobRecHead: TFBBlobRecHead;
 begin
-  Result := inherited OpenFile(AFileName);
+  Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
 
   // read header page
