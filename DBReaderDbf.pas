@@ -9,6 +9,17 @@ License: MIT
 https://www.dbase.com/Knowledgebase/INT/db7_file_fmt.htm
 https://www.clicketyclick.dk/databases/xbase/format/
 
+Memo file (.fpt) header:
+00..03   - position of next freee block
+04..05   - not used
+06..07   - block size
+08..511  - not used
+
+Memo block:
+00..03   - block signature (0-blob, 1-memo)
+04..07   - data size
+08..     - data
+
 *)
 
 interface
@@ -28,6 +39,7 @@ type
     TableFlags: Byte;                 // see DBF_FILE_FLAG_
     CodePage: Byte;                   // Code page mark
     Reserved30: Word;                 // Reserved, contains 0x00
+    //CodePageName: array [0..31] of AnsiChar; // Code page name (DB4+)
   end;
 
   // After header:
@@ -37,16 +49,13 @@ type
   //              path of an associated database (.dbc) file, information. If the first byte is 0x00,
   //              the file is not associated with a database. Therefore, database files always contain 0x00.
 
-  TDbfFieldSubRec = packed record
-    Name: array [0..10] of AnsiChar;  // Field name with a maximum of 10 characters. If less than 10, it is padded with null characters (0x00).
+  TDbfFieldRec = record
+    Name: string;                     // Field name with a maximum of 10 characters. If less than 10, it is padded with null characters (0x00).
     FieldType: AnsiChar;              // Field type - see DBF_FIELD_TYPE_
     FieldOffs: Cardinal;              // Displacement of field in record
     FieldLen: Byte;                   // Length of field (in bytes)
     DecimalLen: Byte;                 // Number of decimal places
     FieldFlags: Byte;                 // Field flags - see DBF_FIELD_FLAG_
-    AutoIncNext: Cardinal;            // Value of autoincrement Next value
-    AutoIncStep: Byte;                // Value of autoincrement Step value
-    Reserved24: array [24..31] of Byte;
   end;
 
 const
@@ -55,6 +64,7 @@ const
 
   DBF_FILE_TYPE_FB      = $02;  // FoxBASE
   DBF_FILE_TYPE_DB3     = $03;  // FoxBASE+/Dbase III plus, no memo
+  DBF_FILE_TYPE_DB7     = $04;  // dBase Level 7
   DBF_FILE_TYPE_VFP     = $30;  // Visual FoxPro
   DBF_FILE_TYPE_VFP_A   = $31;  // Visual FoxPro, autoincrement enabled
   DBF_FILE_TYPE_VFP_V   = $32;  // Visual FoxPro with field type Varchar or Varbinary
@@ -98,8 +108,9 @@ const
   DBF_REC_STATE_NORM      = ' ';
   DBF_REC_STATE_DELETED   = '*';
 
-  DBF_CODEPAGE_866        = 101;  // Codepage 866 Russian MS-DOS
-  DBF_CODEPAGE_1251       = 201;  // Codepage 866 Russian Windows
+  DBF_CODEPAGE_866        = 38;   // Codepage 866 Russian MS-DOS
+  DBF_CODEPAGE_866_2      = 101;  // Codepage 866 Russian MS-DOS
+  DBF_CODEPAGE_1251       = 201;  // Codepage 1251 Russian Windows
 
 type
   TDBReaderDbf = class(TDBReader)
@@ -116,7 +127,7 @@ type
 
   public
     DbfHeader: TDbfHeaderRec;
-    DbfFields: array of TDbfFieldSubRec;
+    DbfFields: array of TDbfFieldRec;
     TableName: string;
 
     procedure AfterConstruction(); override;
@@ -134,6 +145,32 @@ type
   end;
 
 implementation
+
+type
+  // dBase field structure
+  TDbfFieldSubRec1 = packed record
+    Name: array [0..10] of AnsiChar;  // Field name with a maximum of 10 characters. If less than 10, it is padded with null characters (0x00).
+    FieldType: AnsiChar;              // Field type - see DBF_FIELD_TYPE_
+    FieldOffs: Cardinal;              // Displacement of field in record
+    FieldLen: Byte;                   // Length of field (in bytes)
+    DecimalLen: Byte;                 // Number of decimal places
+    FieldFlags: Byte;                 // Field flags - see DBF_FIELD_FLAG_
+    AutoIncNext: Cardinal;            // Value of autoincrement Next value
+    AutoIncStep: Byte;                // Value of autoincrement Step value
+    Reserved24: array [24..31] of Byte;
+  end;
+  // dBase 4 field structure
+  TDbfFieldSubRec4 = packed record
+    Name: array [0..31] of AnsiChar;  // Field name with a maximum of 32 characters. If less than 32, it is padded with null characters (0x00).
+    FieldType: AnsiChar;              // Field type - see DBF_FIELD_TYPE_
+    FieldLen: Byte;                   // Length of field (in bytes)
+    DecimalLen: Byte;                 // Number of decimal places
+    Reserved35: Word;
+    FieldFlags: Byte;                 // Field flags - see DBF_FIELD_FLAG_
+    Reserved37: Word;
+    AutoIncNext: Cardinal;            // Value of autoincrement Next value
+    Reserved44: array [44..47] of Byte;
+  end;
 
 const
   DBF_MEMO_HEADER_SIZE = 512;
@@ -201,6 +238,7 @@ function DbfCodepageName(AValue: Byte): string;
 begin
   case AValue of
     DBF_CODEPAGE_866:      Result := 'Codepage 866 Russian MS-DOS';
+    DBF_CODEPAGE_866_2:    Result := 'Codepage 866 Russian MS-DOS';
     DBF_CODEPAGE_1251:     Result := 'Codepage 1251 Russian Windows';
   else
     Result := 'Unknown codepage (' + IntToStr(AValue) + ')';
@@ -298,8 +336,10 @@ end;
 
 function TDBReaderDbf.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
-  DbfField: TDbfFieldSubRec;
-  n, nOffs: Integer;
+  DbfField1: TDbfFieldSubRec1;
+  DbfField4: TDbfFieldSubRec4;
+  iFieldSize, n, nOffs: Integer;
+  CodePageName: array [0..31] of AnsiChar; // Code page name (DB4+)
   s: string;
 begin
   FreeAndNil(FMemoStream);
@@ -313,24 +353,64 @@ begin
   // read header
   FFile.Position := 0;
   FFile.Read(DbfHeader, SizeOf(DbfHeader));
+
+  iFieldSize := SizeOf(DbfField1);
+  if DbfHeader.FileType in [DBF_FILE_TYPE_DB7] then
+  begin
+    // read codepage name
+    FFile.Read(CodePageName, SizeOf(CodePageName));
+    if Trim(CodePageName) = 'db866ru0' then
+      DbfHeader.CodePage := DBF_CODEPAGE_866;
+    FFile.Position := $44;
+    iFieldSize := SizeOf(DbfField4);
+  end;
+
   // read field defs
+  n := 0;
   nOffs := 1; // skip rec state byte
-  while FFile.Position + SizeOf(DbfField) < DbfHeader.FirstRowOffs do
+  while FFile.Position + iFieldSize < DbfHeader.FirstRowOffs do
   begin
     //FieldPos := FFile.Position;
-    FFile.Read(DbfField, SizeOf(DbfField));
-    if DbfField.Name[0] = #$0D then
-      Break;
+    if iFieldSize = SizeOf(DbfField1) then
+    begin
+      FFile.Read(DbfField1, SizeOf(DbfField1));
+      if DbfField1.Name[0] = #$0D then
+        Break;
 
-    // copy field rec
-    n := Length(DbfFields);
-    SetLength(DbfFields, n+1);
-    DbfFields[n] := DbfField;
+      n := Length(DbfFields);
+      SetLength(DbfFields, n+1);
+      // copy field rec
+      DbfFields[n].Name := DbfField1.Name;
+      DbfFields[n].FieldType := DbfField1.FieldType;
+      DbfFields[n].FieldOffs := DbfField1.FieldOffs;
+      DbfFields[n].FieldLen := DbfField1.FieldLen;
+      DbfFields[n].DecimalLen := DbfField1.DecimalLen;
+      DbfFields[n].FieldFlags := DbfField1.FieldFlags;
+    end
+    else if iFieldSize = SizeOf(DbfField4) then
+    begin
+      // dBase 4
+      FFile.Read(DbfField4, SizeOf(DbfField4));
+      if DbfField4.Name[0] = #$0D then
+        Break;
+
+      n := Length(DbfFields);
+      SetLength(DbfFields, n+1);
+      // copy field rec
+      DbfFields[n].Name := DbfField4.Name;
+      DbfFields[n].FieldType := DbfField4.FieldType;
+      DbfFields[n].FieldOffs := 0;
+      DbfFields[n].FieldLen := DbfField4.FieldLen;
+      DbfFields[n].DecimalLen := DbfField4.DecimalLen;
+      DbfFields[n].FieldFlags := DbfField4.FieldFlags;
+    end
+    else
+      Break;
 
     // update field offset
     if DbfFields[n].FieldOffs = 0 then
       DbfFields[n].FieldOffs := nOffs;
-    Inc(nOffs, DbfField.FieldLen);
+    Inc(nOffs, DbfFields[n].FieldLen);
   end;
 
   // read memo data (optional)
@@ -417,7 +497,7 @@ begin
   if ALen > 0 then
     System.Move(ARaw[AStart+1], Result[1], ALen);
 
-  if (DbfHeader.CodePage = DBF_CODEPAGE_866) and (Result <> '') then
+  if (DbfHeader.CodePage in [DBF_CODEPAGE_866, DBF_CODEPAGE_866_2]) and (Result <> '') then
     OemToChar(PChar(Result), PChar(Result));
 end;
 
@@ -463,7 +543,7 @@ begin
     for i := 0 to Length(DbfFields) - 1 do
     begin
       // read field
-      s := ReadString(TmpRow.RawData, DbfFields[i].FieldOffs, DbfFields[i].FieldLen);
+      s := ReadString(TmpRow.RawData, Word(DbfFields[i].FieldOffs), DbfFields[i].FieldLen);
       if Trim(s) = '' then
       begin
         case DbfFields[i].FieldType of

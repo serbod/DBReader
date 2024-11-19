@@ -11,7 +11,7 @@ https://anatoliyon.wordpress.com/2017/10/03/data-file-structure-and-pages/
 https://anatoliyon.wordpress.com/2017/12/17/data-file-page-types-gam-sgam-pfs-and-iam/
 https://techcommunity.microsoft.com/t5/sql-server-support-blog/sql-server-extents-pfs-gam-sgam-and-iam-and-related-corruptions/ba-p/1606011
 https://techcommunity.microsoft.com/t5/sql-server-support-blog/sql-server-iam-page/ba-p/1637065
-http://improve.dk/archive/2011/07/15/identifying-complex-columns-in-records.aspx
+http://improve.dk/category/SQL%20Server%20-%20Internals/
 
 *)
 
@@ -177,7 +177,7 @@ type
   TMdfRowOffsetArray = array of Word;
 
   TMdfRowRec = record
-    Attrs: Word;
+    Attrs: Byte;
     RowOffs: Word;
     RawDataLen: Integer;    // fixed part size
     VarDataOffs: Word;      // offset to variable data
@@ -916,7 +916,8 @@ begin
 
   nRowOffs := FPagePos;
   // === Row structure:
-  // [00]           int16   <Attrs>
+  // [00]           int8    <Attrs>
+  // [01]           int8    <??>
   // [02]           int16   <RawDataLen>
   // [04]                   [RawData]
   // [RawDataLen]   int16   <ColCount>
@@ -928,12 +929,28 @@ begin
   // [VarEndOffs0]          [VarData1]
   // ...
 
-  rr.Attrs := ReadWord(FPageBuf, nRowOffs);
+  rr.Attrs := ReadByte(FPageBuf, nRowOffs);
   if rr.Attrs > $30 then
   begin
-    LogInfo(Format('![%.4x] row=%d  hdr.Attrs=$%x ', [FPagePos, ARecId, rr.Attrs]));
+    LogInfo(Format('![%.4x] row=%d  hdr.Attrs=$%.2x ', [FPagePos, ARecId, rr.Attrs]));
     Exit;
   end;
+  if (rr.Attrs and MDF_REC_TYPE_MASK) > 0 then
+  begin
+    // == Forwarding rec
+    // [00]   u8    <Attrs>
+    // [01]   u32   <PageID>
+    // [05]   u16   <FileID>
+    // [07]   u16   <SlotID>
+
+    // == Forwarded rec
+    // VarEndOffs with top bit set (+ $8000) contain extra var data:
+    // [00]   u16   <ColID> (+ $100)
+    // [02]   u32   <PageID>  points to forwarding rec
+    // [06]   u16   <FileID>
+    // [08]   u16   <SlotID>
+  end;
+
   rr.RawDataLen := ReadWord(FPageBuf, nRowOffs + 2);
   if nRowOffs + rr.RawDataLen > SizeOf(FPageBuf) then
   begin

@@ -13,7 +13,7 @@ uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
-  DBReaderGsr, DBReaderDbf, FSReaderMtf, DBReaderMdf;
+  DBReaderGsr, DBReaderDbf, FSReaderMtf, DBReaderMdf, Menus;
 
 type
   TMyTreeNode = class(TTreeNode)
@@ -39,6 +39,9 @@ type
     FileOpenDialog: TFileOpenDialog;
     tsTableInfo: TTabSheet;
     memoInfo: TMemo;
+    pmGrid: TPopupMenu;
+    miExporttoCSV: TMenuItem;
+    miDBGrid1: TMenuItem;
     procedure FormCreate(Sender: TObject);
     procedure dgItemsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
       State: TGridDrawState);
@@ -46,6 +49,8 @@ type
     procedure btnFileSelectClick(Sender: TObject);
     procedure dgItemsDblClick(Sender: TObject);
     procedure dgItemsSelectCell(Sender: TObject; ACol, ARow: Integer; var CanSelect: Boolean);
+    procedure miExporttoCSVClick(Sender: TObject);
+    procedure miDBGrid1Click(Sender: TObject);
   private
     { Private declarations }
     FReader: TDBReader;
@@ -58,6 +63,10 @@ type
     procedure OnLogHandler(const S: string);
     function AddTreeNode(AParent: TTreeNode; AName, ATableName, AFileName: string): TMyTreeNode;
     function GetFieldColor(const AField: TDbFieldDefRec): TColor;
+
+    procedure ExportGridToCSV();
+    procedure TestDbGrid();
+
     procedure FillTreeFB();
     procedure FillTreeByFiles(AFileName: string);
     procedure ShowTable(ATableName: string);
@@ -107,6 +116,16 @@ begin
 
 end;
 
+procedure TFormMain.miDBGrid1Click(Sender: TObject);
+begin
+  TestDbGrid();
+end;
+
+procedure TFormMain.miExporttoCSVClick(Sender: TObject);
+begin
+  ExportGridToCSV();
+end;
+
 procedure TFormMain.btnFileSelectClick(Sender: TObject);
 begin
   if FileOpenDialog.Execute then
@@ -138,6 +157,7 @@ begin
       if TmpField.FieldType <> ftUnknown then
       begin
         FormRawValue.FieldTypeName := TmpField.TypeName;
+        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob];
         FormRawValue.ShowValue(TmpRow.RawData, TmpField.RawOffset, TmpField.Size);
       end
       else
@@ -151,6 +171,7 @@ begin
             iOffs := iOffs + FRowsList.FieldsDef[i].Size;
         end;
         FormRawValue.FieldTypeName := TmpField.TypeName;
+        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob];
         FormRawValue.ShowValue(TmpRow.RawData, iOffs, TmpField.Size);
       end;
     end;
@@ -262,6 +283,69 @@ procedure TFormMain.dgItemsSelectCell(Sender: TObject; ACol, ARow: Integer; var 
 begin
   FCurRowIndex := ARow - 1;
   FCurColIndex := ACol;
+end;
+
+procedure TFormMain.ExportGridToCSV;
+var
+  dlg: TSaveDialog;
+  sFileName: string;
+  fs: TFileStream;
+  i, ii: Integer;
+  s, ss, sSeparator: string;
+  TmpRow: TDbRowItem;
+begin
+  // select filename
+  sFileName := '';
+  sSeparator := #09; // TAB
+  dlg := TSaveDialog.Create(Self);
+  try
+    dlg.DefaultExt := '.csv';
+    dlg.FileName := FTableName + '.csv';
+    dlg.Filter := 'CSV|*.csv';
+    if dlg.Execute(Self.Handle) then
+    begin
+      sFileName := dlg.FileName;
+    end;
+  finally
+    dlg.Free();
+  end;
+  if sFileName = '' then
+    Exit;
+
+  // export to stream
+  fs := TFileStream.Create(sFileName, fmCreate);
+  try
+    // column names
+    ss := '';
+    for ii := 0 to Length(FRowsList.FieldsDef) - 1 do
+    begin
+      s := FRowsList.FieldsDef[ii].Name;
+      if ss <> '' then
+        ss := ss + sSeparator;
+      ss := ss + s;
+    end;
+    StrToStream(ss, fs);
+
+    // rows
+    for i := 0 to FRowsList.Count - 1 do
+    begin
+      TmpRow := FRowsList.GetItem(i);
+      ss := '';
+      for ii := 0 to Length(FRowsList.FieldsDef) - 1 do
+      begin
+        s := TmpRow.GetFieldAsStr(ii);
+        if (Pos(sSeparator, s) > 0) then
+          s := QuotedStr(s);
+        if ss <> '' then
+          ss := ss + sSeparator;
+        ss := ss + s;
+      end;
+      StrToStream(ss, fs);
+
+    end;
+  finally
+    fs.Free();
+  end;
 end;
 
 procedure TFormMain.FillTreeByFiles(AFileName: string);
@@ -626,6 +710,15 @@ begin
   s1 := #2 + 'ab' + #254 + 'c' + #3 +'def';
   s2 := RleDecompress(s1);
   OnLogHandler(s2);
+end;
+
+procedure TFormMain.TestDbGrid;
+begin
+{
+  FormDbGrid.DataSet.AssignRowsList(FRowsList);
+  FormDbGrid.dbgr.Columns.RebuildColumns();
+  FormDbGrid.Show();
+}  
 end;
 
 procedure TFormMain.tvMainChange(Sender: TObject; Node: TTreeNode);

@@ -109,6 +109,7 @@ type
     // read field data
     function GetFieldData(Field: TField; Buffer: Pointer): Boolean; override;
     constructor Create(AOwner: TComponent); override;
+    function CreateBlobStream(Field: TField; Mode: TBlobStreamMode): TStream; override;
 
     procedure AssignRowsList(ARowsList: TDbRowsList);
   end;
@@ -137,6 +138,7 @@ type
 
 procedure BufToFile(const ABuf; ABufSize: Integer; AFileName: string);
 procedure StrToFile(AStr: AnsiString; AFileName: string);
+procedure StrToStream(AStr: AnsiString; AStream: TStream; AAddLineEnd: Boolean = True);
 // Returns Buffer content in HEX, capital letters, without spaces
 // Example: 010ABC
 function BufToHex(const Buffer; BufferSize: Integer): string;
@@ -171,6 +173,14 @@ procedure StrToFile(AStr: AnsiString; AFileName: string);
 begin
   if AStr = '' then Exit;
   BufToFile(AStr[1], Length(AStr), AFileName);
+end;
+
+procedure StrToStream(AStr: AnsiString; AStream: TStream; AAddLineEnd: Boolean);
+begin
+  if AAddLineEnd then
+    AStr := AStr + sLineBreak;
+  if AStr = '' then Exit;
+  AStream.Write(AStr[1], Length(AStr));
 end;
 
 // Returns Buffer content in HEX, capital letters, without spaces
@@ -303,6 +313,28 @@ begin
   FIsOpen := False;
 end;
 
+function TDbReaderDataSet.CreateBlobStream(Field: TField; Mode: TBlobStreamMode): TStream;
+var
+  RecItem: TDbRowItem;
+  n: Integer;
+  sData: AnsiString;
+begin
+  Result := TMemoryStream.Create();
+  if (Mode <> bmRead) then
+    Exit;
+  if not Assigned(FRowsList) or (Length(FRowsList.FieldsDef) < Field.FieldNo) then
+    Exit;
+
+  RecItem := FRowsList.GetItem(PRecordBuffer(ActiveBuffer)^.RecordNum-1);
+
+  n := Field.FieldNo-1;
+  sData := RecItem.Values[n];
+  if sData <> '' then
+    Result.Write(sData[1], Length(sData));
+
+  Result.Position := 0;
+end;
+
 procedure TDbReaderDataSet.InternalHandleException;
 begin
   //raise Exception.Create('TDbReaderDataSet');
@@ -320,7 +352,7 @@ begin
       DataType := FRowsList.FieldsDef[i].FieldType;
       FieldNo := i+1;
       Name := FRowsList.FieldsDef[i].Name;
-      Size := FRowsList.FieldsDef[i].Size;
+      //Size := FRowsList.FieldsDef[i].Size;
     end;
   end;
 end;
@@ -404,6 +436,7 @@ end;
 procedure TDbReaderDataSet.AssignRowsList(ARowsList: TDbRowsList);
 begin
   FRowsList := ARowsList;
+  Open();
 end;
 
 function TDbReaderDataSet.GetCanModify: Boolean;
@@ -415,6 +448,7 @@ function TDbReaderDataSet.GetFieldData(Field: TField; Buffer: Pointer): Boolean;
 var
   RecItem: TDbRowItem;
   n: Integer;
+  s: string;
 begin
   Result := False;
   if not Assigned(FRowsList) or (Length(FRowsList.FieldsDef) < Field.FieldNo) then
@@ -425,12 +459,17 @@ begin
   Result := True;
   n := Field.FieldNo-1;
   case FRowsList.FieldsDef[n].FieldType of
-    ftString: PAnsiString(Buffer)^ := RecItem.Values[n];
+    ftString:
+    begin
+      //PAnsiString(Buffer)^ := RecItem.Values[n];
+      s := RecItem.Values[n];
+      StrLCopy(Buffer, PChar(s), Length(s));
+    end;
     ftSmallint: PSmallInt(Buffer)^ := RecItem.Values[n];
     ftInteger: PInteger(Buffer)^ := RecItem.Values[n];
     ftWord: PWord(Buffer)^ := RecItem.Values[n];
     ftBoolean: PBoolean(Buffer)^ := RecItem.Values[n];
-    ftFloat: PExtended(Buffer)^ := RecItem.Values[n];
+    ftFloat: PDouble(Buffer)^ := RecItem.Values[n];
     ftCurrency: PCurrency(Buffer)^ := RecItem.Values[n];
     ftDate: PDate(Buffer)^ := RecItem.Values[n];
     ftTime: PDateTime(Buffer)^ := RecItem.Values[n];

@@ -32,6 +32,7 @@ type
     RawLen: Integer;       // value length
     FieldName: string;
     FieldTypeName: string;
+    IsBlob: Boolean;
 
     procedure UpdateView();
 
@@ -163,7 +164,14 @@ begin
 
   if chkValue.Checked then
   begin
-    memoText.Text := VarToStr(Value);
+    s := VarToStr(Value);
+    if s <> '' then
+      memoHex.Text := BufferToHex(s[1], Length(s));
+
+    if IsBlob and (s <> '') then
+      memoText.Text := DataAsStr(s[1], Length(s))
+    else
+      memoText.Text := s;
   end;
 end;
 

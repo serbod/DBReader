@@ -73,16 +73,12 @@ object FormMain: TFormMain
     Top = 0
     Width = 603
     Height = 474
-    ActivePage = tsLog
+    ActivePage = tsGrid
     Align = alClient
     TabOrder = 1
     object tsGrid: TTabSheet
       Caption = 'Grid'
       ImageIndex = 1
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object dgItems: TDrawGrid
         Left = 0
         Top = 0
@@ -90,6 +86,7 @@ object FormMain: TFormMain
         Height = 443
         Align = alClient
         Options = [goFixedVertLine, goFixedHorzLine, goVertLine, goHorzLine, goRangeSelect, goColSizing]
+        PopupMenu = pmGrid
         TabOrder = 0
         OnDblClick = dgItemsDblClick
         OnDrawCell = dgItemsDrawCell
@@ -99,10 +96,6 @@ object FormMain: TFormMain
     object tsTableInfo: TTabSheet
       Caption = 'Table Info'
       ImageIndex = 2
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoInfo: TMemo
         AlignWithMargins = True
         Left = 4
@@ -186,5 +179,18 @@ object FormMain: TFormMain
     Options = []
     Left = 100
     Top = 4
+  end
+  object pmGrid: TPopupMenu
+    Left = 372
+    Top = 172
+    object miExporttoCSV: TMenuItem
+      Caption = 'Export to CSV'
+      OnClick = miExporttoCSVClick
+    end
+    object miDBGrid1: TMenuItem
+      Caption = 'TestDBGrid'
+      Visible = False
+      OnClick = miDBGrid1Click
+    end
   end
 end
