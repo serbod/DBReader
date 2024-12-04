@@ -211,6 +211,10 @@ const
   MTF_ESET = 'ESET';      // End of SET descriptor block
   MTF_EOTM = 'EOTM';      // End Of Tape Marker descriptor block
   MTF_SFMB = 'SFMB';      // Soft FileMark descriptor Block
+  // guessed
+  MTF_MSCI = 'MSCI';      // MS sql Content Index descriptor block
+  MTF_MSDA = 'MSDA';      // MS sql DAta files descriptor block
+  MTF_MSTL = 'MSTL';      // MS sql Transaction Log descriptor block
 
   MTF_STREAM_STAN = 'STAN';  // Standard, non-specific file data stream.
   MTF_STREAM_PNAM = 'PNAM';  // Directory name in stream.
@@ -223,6 +227,7 @@ const
   //MTF_STREAM_TFDD = 'TFDD';  // LMO FDD stream
   MTF_STREAM_MQCI = 'MQCI';  // MS SQL backup info
   MTF_STREAM_MQDA = 'MQDA';  // MS SQL backup data
+  //'OTCP'
 
   MTF_STR_ANSI = 1;          // single byte ANSI
   MTF_STR_UNICODE = 2;       // two byte Unicode
@@ -305,6 +310,18 @@ begin
   FileName := AFileName;
   FBlockPos := 0;
   LogInfo(Format('==== File %s  Size=%d', [FileName, FFile.Size]));
+
+  // check file is TAPE
+  FFile.Position := FBlockPos;
+  FFile.Read(hdr, SizeOf(hdr));
+  if hdr.BlockType <> MTF_TAPE then
+  begin
+    if hdr.BlockType = 'MSSQ' then
+      LogInfo(Format('! Compressed MSSQLBAK not supported!', []))
+    else
+      LogInfo(Format('! Not TAPE format!', []));
+    Exit;
+  end;
 
   while FBlockPos + SizeOf(hdr) < FFile.Size do
   begin
@@ -417,7 +434,13 @@ begin
     begin
       // unknown block (or stream?)
       // skip header data
-      FFile.Position := FBlockPos + hdr.DataOffs;
+      if hdr.DataOffs > 0 then
+        FFile.Position := FBlockPos + hdr.DataOffs
+      else
+      begin
+        LogInfo('Wrong header size: ' + IntToStr(hdr.DataOffs));
+        Exit;
+      end;
       IsEndOfBlock := FFile.Position >= NextBlockPos;
       while not IsEndOfBlock do
         IsEndOfBlock := ReadStream();
@@ -428,7 +451,7 @@ begin
       Inc(FBlockPos, FBlockSize)
     else
       FBlockPos := NextBlockPos;
-    if FBlockPos > $FFFFF then
+    if FBlockPos > $FFFFFFFF then
       Exit;
   end;
 
@@ -445,8 +468,34 @@ var
 begin
   Result := False;
   //FFile.Seek(4, soFromCurrent);
-  //nPos := FFile.Position;
+  nPos := FFile.Position;
+  if nPos + SizeOf(hdr_stream) > FFile.Size then
+  begin
+    FFile.Position := FFile.Size;
+    Result := True;
+    Exit;
+  end;
+  
   FFile.Read(hdr_stream, SizeOf(hdr_stream));
+
+  // check for block instead of stream
+  if (hdr_stream.StreamId = MTF_TAPE)
+  or (hdr_stream.StreamId = MTF_SSET)
+  or (hdr_stream.StreamId = MTF_VOLB)
+  or (hdr_stream.StreamId = MTF_DIRB)
+  or (hdr_stream.StreamId = MTF_FILE)
+  or (hdr_stream.StreamId = MTF_CFIL)
+  or (hdr_stream.StreamId = MTF_ESPB)
+  or (hdr_stream.StreamId = MTF_ESET)
+  or (hdr_stream.StreamId = MTF_EOTM)
+  or (hdr_stream.StreamId = MTF_SFMB)
+  then
+  begin
+    // rewind back to block start
+    FFile.Position := nPos;
+    Result := True;
+    Exit;
+  end;
 
   nPos := FFile.Position + hdr_stream.StreamLen;
   if (nPos mod 4) > 0 then
@@ -502,7 +551,8 @@ begin
         LogInfo('File number: ' + IntToStr(hdr_sfin.DataNum));
         FBlockPos := CurBlockPos;
 
-        if LowerCase(ExtractFileExt(s)) = '.mdf' then
+        // only first file
+        if (LowerCase(ExtractFileExt(s)) = '.mdf') and (FMdfName = '') then
         begin
           FMdfNum := hdr_sfin.DataNum;
           FMdfSize := hdr_sfin.FileSize;
@@ -530,6 +580,9 @@ begin
       if (FMQDANum = FMdfNum) and (FMdfSize > 0) and (FMdfName <> '') then
       begin
         FMdfPos := FFile.Position;
+        if hdr_stream.StreamLen > FMdfSize then
+          FMdfSize := hdr_stream.StreamLen;
+
         //DumpToFile(FMdfPos, FMdfSize, FMdfName);
         LogInfo('Inner file: ' + FMdfName);
       end;
@@ -538,6 +591,8 @@ begin
   else
   begin
     LogInfo(Format('Stream %s size=%d', [hdr_stream.StreamId, hdr_stream.StreamLen]));
+    if hdr_stream.StreamLen <= 0 then
+      raise Exception.Create('Wrong stream size: ' + IntToStr(hdr_stream.StreamLen));
   end;
   //FFile.Seek(hdr_stream.StreamLen, soFromCurrent);
   FFile.Position := nPos;

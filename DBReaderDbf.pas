@@ -108,9 +108,15 @@ const
   DBF_REC_STATE_NORM      = ' ';
   DBF_REC_STATE_DELETED   = '*';
 
-  DBF_CODEPAGE_866        = 38;   // Codepage 866 Russian MS-DOS
-  DBF_CODEPAGE_866_2      = 101;  // Codepage 866 Russian MS-DOS
-  DBF_CODEPAGE_1251       = 201;  // Codepage 1251 Russian Windows
+  DBF_CODEPAGE_437        = 001;  // Codepage 437 DOS Latin
+  DBF_CODEPAGE_850        = 002;  // Codepage 850 DOS Western European
+  DBF_CODEPAGE_1252       = 003;  // Codepage 1252 Windows Western European
+  DBF_CODEPAGE_866        = 038;  // Codepage 866 DOS Russian
+  DBF_CODEPAGE_852        = 100;  // Codepage 852 DOS Central European
+  DBF_CODEPAGE_866_2      = 101;  // Codepage 866 DOS Russian
+  DBF_CODEPAGE_895        = 104;  // Codepage 895 Japanese-Roman
+  DBF_CODEPAGE_1250       = 200;  // Codepage 1250 Windows Central European
+  DBF_CODEPAGE_1251       = 201;  // Codepage 1251 Windows Russian
 
 type
   TDBReaderDbf = class(TDBReader)

@@ -12,6 +12,7 @@ object FormMain: TFormMain
   Font.Style = []
   OldCreateOrder = False
   OnCreate = FormCreate
+  OnDestroy = FormDestroy
   PixelsPerInch = 96
   TextHeight = 16
   object spl1: TSplitter
@@ -73,7 +74,7 @@ object FormMain: TFormMain
     Top = 0
     Width = 603
     Height = 474
-    ActivePage = tsGrid
+    ActivePage = tsLog
     Align = alClient
     TabOrder = 1
     object tsGrid: TTabSheet
@@ -150,7 +151,7 @@ object FormMain: TFormMain
     FileTypes = <
       item
         DisplayName = 'Database files'
-        FileMask = '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf'
+        FileMask = '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak'
       end
       item
         DisplayName = 'Interbase/Firebird files (*.gdb, *.fdb)'
@@ -171,6 +172,10 @@ object FormMain: TFormMain
       item
         DisplayName = 'DBF (*.dbf)'
         FileMask = '*.dbf'
+      end
+      item
+        DisplayName = 'MS SQL (*.mdf, *.bak)'
+        FileMask = '*.mdf;*.bak'
       end
       item
         DisplayName = 'All files (*.*)'

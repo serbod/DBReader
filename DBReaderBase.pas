@@ -22,7 +22,7 @@ type
     TypeName: string;        // field type name
     FieldType: TFieldType;
     Size: Integer;
-    RawOffset: Cardinal;     // raw data offset
+    RawOffset: Cardinal;     // raw data offset (0..Length(RawData)-1)
   end;
 
   TDbRowItem = class(TObject)
@@ -56,7 +56,8 @@ type
     FIsSingleTable: Boolean;
 
   public
-    IsLogPages: Boolean;
+    IsDebugPages: Boolean;
+    IsDebugRows: Boolean;
     FileName: string;
 
     procedure AfterConstruction(); override;
@@ -296,7 +297,7 @@ function TDBReader.OpenFile(AFileName: string; AStream: TStream): Boolean;
 begin
   Result := False;
   FreeAndNil(FFile);
-  if not FileExists(AFileName) then Exit;
+  if not FileExists(AFileName) and (not Assigned(AStream)) then Exit;
   if Assigned(AStream) then
     FFile := AStream
   else

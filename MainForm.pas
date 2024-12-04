@@ -51,8 +51,11 @@ type
     procedure dgItemsSelectCell(Sender: TObject; ACol, ARow: Integer; var CanSelect: Boolean);
     procedure miExporttoCSVClick(Sender: TObject);
     procedure miDBGrid1Click(Sender: TObject);
+    procedure FormDestroy(Sender: TObject);
   private
     { Private declarations }
+    FLogStream: TStream;
+    FSettings: TStringList;
     FReader: TDBReader;
     FRowsList: TDbRowsList;
     FGridMode: TGridMode;
@@ -67,6 +70,7 @@ type
     procedure ExportGridToCSV();
     procedure TestDbGrid();
 
+    procedure InitReader(AReader: TDBReader); // set reader options
     procedure FillTreeFB();
     procedure FillTreeByFiles(AFileName: string);
     procedure ShowTable(ATableName: string);
@@ -114,6 +118,13 @@ begin
     Result := clBlack;
   end;
 
+end;
+
+procedure TFormMain.InitReader(AReader: TDBReader);
+begin
+  AReader.OnLog := OnLogHandler;
+  AReader.IsDebugPages := (FSettings.Values['DebugPages'] <> '');
+  AReader.IsDebugRows := (FSettings.Values['DebugRows'] <> '');
 end;
 
 procedure TFormMain.miDBGrid1Click(Sender: TObject);
@@ -421,8 +432,24 @@ end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
 var
-  s: string;
+  s, sLogName: string;
 begin
+  FSettings := TStringList.Create();
+  if FileExists('DBReader.ini') then
+  begin
+    FSettings.LoadFromFile('DBReader.ini');
+    if FSettings.Values['LogToFile'] <> '' then
+    begin
+      sLogName := 'DBReader.log';
+      if not FileExists(sLogName) then
+      begin
+        FLogStream := TFileStream.Create(sLogName, fmCreate);
+        FLogStream.Free();
+      end;
+      FLogStream := TFileStream.Create(sLogName, fmOpenWrite + fmShareDenyNone);
+      FLogStream.Size := 0;
+    end;
+  end;
   memoLog.Clear();
   FRowsList := TRDB_RowsList.Create(TRDB_TableRowItem);
   MaxRows := MaxInt;
@@ -434,9 +461,18 @@ begin
   end;
 end;
 
+procedure TFormMain.FormDestroy(Sender: TObject);
+begin
+  FreeAndNil(FLogStream);
+  FreeAndNil(FSettings);
+end;
+
 procedure TFormMain.OnLogHandler(const S: string);
 begin
-  memoLog.Lines.Add(S);
+  if Assigned(FLogStream) then
+    StrToStream(S, FLogStream, True);
+  if memoLog.Lines.Count < 1000  then
+    memoLog.Lines.Add(S);
 end;
 
 procedure TFormMain.OpenBDB(AFileName: string);
@@ -456,8 +492,7 @@ begin
   memoLog.Lines.BeginUpdate();
   memoLog.Lines.Clear();
   FReader := TDBReaderBerkley.Create(Self);
-  FReader.OnLog := OnLogHandler;
-  FReader.IsLogPages := True;
+  InitReader(FReader);
   FReader.OpenFile(AFileName);
   memoLog.Lines.EndUpdate();
 end;
@@ -465,7 +500,7 @@ end;
 procedure TFormMain.OpenCDS(AFileName: string);
 begin
   FReader := TDBReaderMidas.Create(Self);
-  FReader.OnLog := OnLogHandler;
+  InitReader(FReader);
   FReader.OpenFile(AFileName);
 
   ShowTable(ExtractFileName(AFileName));
@@ -524,7 +559,7 @@ end;
 procedure TFormMain.OpenDbf(AFileName: string);
 begin
   FReader := TDBReaderDbf.Create(Self);
-  FReader.OnLog := OnLogHandler;
+  InitReader(FReader);
   FReader.OpenFile(AFileName);
 
   ShowTable((FReader as TDBReaderDbf).TableName);
@@ -536,8 +571,7 @@ end;
 procedure TFormMain.OpenFB(AFileName: string);
 begin
   FReader := TDBReaderFB.Create(Self);
-  FReader.OnLog := OnLogHandler;
-  //FReader.IsLogPages := True;
+  InitReader(FReader);
   //FReader.IsLogBlobs := True;
   //FReader.DebugRelID := 12;
   FReader.OpenFile(AFileName);
@@ -552,7 +586,7 @@ var
   TmpTable: TGsrTable;
 begin
   FReader := TDBReaderGsr.Create(Self);
-  FReader.OnLog := OnLogHandler;
+  InitReader(FReader);
   try
     FReader.OpenFile(AFileName);
   except
@@ -584,12 +618,12 @@ end;
 
 procedure TFormMain.OpenMdf(AFileName: string; AStream: TStream);
 var
-  tn, tnSys: TMyTreeNode;
+  tn, tnParent: TMyTreeNode;
   i: Integer;
   TmpTable: TMdfTable;
 begin
   FReader := TDBReaderMdf.Create(Self);
-  FReader.OnLog := OnLogHandler;
+  InitReader(FReader);
   try
     FReader.OpenFile(AFileName, AStream);
   except
@@ -604,17 +638,25 @@ begin
   for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
   begin
     TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
-    if TmpTable.ObjectID > 100 then
+    if (TmpTable.ObjectID > 100) and (TmpTable.RowCount <> 0) then
       tn := AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
   end;
   // Empty tables
-  tnSys := AddTreeNode(nil, 'System tables', '', '');
+  tnParent := AddTreeNode(nil, 'Empty tables', '', '');
+  for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
+    if (TmpTable.ObjectID > 100) and (TmpTable.RowCount = 0) then
+      tn := AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // System tables
+  tnParent := AddTreeNode(nil, 'System tables', '', '');
   for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
   begin
     TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
     if TmpTable.ObjectID > 100 then
       Continue;
-    tn := AddTreeNode(tnSys, TmpTable.TableName, TmpTable.TableName, '');
+    tn := AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
   end;
   tvMain.Items.EndUpdate();
 end;
@@ -622,7 +664,7 @@ end;
 procedure TFormMain.OpenParadox(AFileName: string);
 begin
   FReader := TDBReaderParadox.Create(Self);
-  FReader.OnLog := OnLogHandler;
+  InitReader(FReader);
   FReader.OpenFile(AFileName);
 
   tvMain.Items.Clear();

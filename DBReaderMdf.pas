@@ -21,8 +21,8 @@ uses
   Windows, SysUtils, Classes, Variants, DBReaderBase, DB;
 
 
-//{$define DEBUG_MDF_PAGE}
 //{$define DEBUG_MDF_ROW}
+{$define DEBUG_MDF_RAW_DATA}
 
 const
   MDF_PAGE_SIZE = $2000;
@@ -49,10 +49,13 @@ type
 
   TMdfTable = class(TDbRowsList)
   public
-    ObjectID: UInt64;
+    ObjectID: LongWord;   // for system tables
+    AllocID: Int64;       // for all tables
     FieldDefArr: TMdfFieldDefRecArr;
     RowCount: Integer;
-    PKFieldName: string;  // primary key field
+    //PKFieldName: string;  // primary key field
+    PageIdArr: array of LongWord;
+    PageIdCount: Integer;
 
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
@@ -65,7 +68,8 @@ type
   public
     function GetItem(AIndex: Integer): TMdfTable;
     function GetByName(AName: string): TMdfTable;
-    function GetByID(AObjID: UInt64): TMdfTable;
+    function GetByID(AObjID: LongWord): TMdfTable;
+    function GetByAllocID(AAllocID: Int64): TMdfTable;
     procedure SortByName();
   end;
 
@@ -80,12 +84,16 @@ type
     // current table
     FCurTable: TMdfTable;
 
+    FIsMetadataLoaded: Boolean;
+
     function ReadNextByte(): Byte;
     function ReadNextWord(): Word;
     function ReadNextDWord(): LongWord;
-    function ReadNextQWord(): UInt64;
+    function ReadNextQWord(): Int64;
+    function ReadNextDate(ASize: Byte): TDateTime;
     function ReadNextDateTime(): TDateTime;
     function ReadNextFloat(): Real;
+    function ReadNextCurrency(): Currency;
     function ReadNextChar(ACount: Word): AnsiString;
 
     procedure ReadNextDataRec(AMinLen, ARecId: Integer);
@@ -94,7 +102,9 @@ type
     function ReadWord(const APageBuf: TMdfPageBuffer; AOffset: Integer): Word;
     function ReadLongWord(const APageBuf: TMdfPageBuffer; AOffset: Integer): LongWord;
 
-    procedure ReadDataPage(const APageBuf: TMdfPageBuffer);
+    function ReadDataPage(const APageBuf: TMdfPageBuffer; ATable: TMdfTable = nil): Boolean;
+    // seek and read page by PID/FID
+    function FindPage(APageID: LongWord; AFileID: Word; var APageBuf: TMdfPageBuffer): Boolean;
 
     // 2-byte data to string
     function WideDataToStr(AData: AnsiString): string;
@@ -179,7 +189,7 @@ type
   TMdfRowRec = record
     Attrs: Byte;
     RowOffs: Word;
-    RawDataLen: Integer;    // fixed part size
+    RawDataLen: Integer;    // fixed part size (offset to ColCount)
     VarDataOffs: Word;      // offset to variable data
     NullBitmapPos: Integer; // from start of block
     NullBitmapLen: Integer;
@@ -222,8 +232,8 @@ const
 
   // System tables
   MDF_SYS_RSCOLS          = 3;
-  MDF_SYS_ROWSETS         = 5;
-  MDF_SYS_ALLOCUNITS      = 7;
+  MDF_SYS_ROWSETS         = 5;   // RowsetID for objects
+  MDF_SYS_ALLOCUNITS      = 7;   // AUID for RowsetID
   MDF_SYS_FILES1          = 8;
   MDF_SYS_PRIORITIES      = 17;
   MDF_SYS_FGFRAG          = 19;
@@ -278,9 +288,6 @@ const
 
   MDF_PID_TABLE = 8277;
   MDF_PID_VIEW  = 8278;
-
-var
-  GlobDebugMode: Integer = 0;
 
 function MdfPageTypeToStr(AVal: Byte): string;
 begin
@@ -421,6 +428,8 @@ begin
     Exit;
 
   ALines.Add(Format('== Table Name=%s  RowCount=%d', [TmpTable.TableName, TmpTable.RowCount]));
+  ALines.Add(Format('AllocID=%s', [IntToHex(TmpTable.AllocID, 16)]));
+  ALines.Add(Format('ObjectID=%s', [IntToHex(TmpTable.ObjectID, 8)]));
   ALines.Add(Format('== Fields  Count=%d', [Length(TmpTable.FieldsDef)]));
   for i := Low(TmpTable.FieldsDef) to High(TmpTable.FieldsDef) do
   begin
@@ -444,11 +453,12 @@ end;
 procedure TDBReaderMdf.FillTablesList;
 var
   i, ii: Integer;
-  ObjTab, ColTab: TMdfTable;
-  TmpRow, ColRow: TDbRowItem;
+  ObjTab, ColTab, RowTab, AloTab: TMdfTable;
+  ObjRow, ColRow, RowRow, AloRow: TDbRowItem;
   cObjType: Char;
-  nTabID, nPrevTabID: UInt64;
-  nColLen, nColID, nColCount: Integer;
+  nTabID, nPrevTabID: LongWord;
+  nRowsetID, nAllocID: Int64;
+  nColLen, nColID, nColCount, nColPos: Integer;
   sColName, sTabType: string;
   nColType: Byte;
   TmpTab: TMdfTable;
@@ -456,33 +466,73 @@ begin
   nPrevTabID := 0;
   TmpTab := nil;
   // schobj  Schema objects
+  AloTab := FTableList.GetByID(MDF_SYS_ALLOCUNITS);
+  RowTab := FTableList.GetByID(MDF_SYS_ROWSETS);
   ObjTab := FTableList.GetByID(MDF_SYS_SCHOBJS);
   ColTab := FTableList.GetByID(MDF_SYS_COLPARS);
+  if not Assigned(AloTab) then Exit;
+  if not Assigned(RowTab) then Exit;
   if not Assigned(ObjTab) then Exit;
   if not Assigned(ColTab) then Exit;
+
   for i := 0 to ObjTab.Count - 1 do
   begin
-    TmpRow := ObjTab.GetItem(i);
-    sTabType := VarToStr(TmpRow.Values[5]);
+    ObjRow := ObjTab.GetItem(i);
+    sTabType := VarToStr(ObjRow.Values[5]);
     cObjType := sTabType[1]; // type
-    if not (cObjType in ['U']) then
+    if not (cObjType in ['U', 'S']) then
       Continue;
 
-    nTabID := TmpRow.Values[0]; // id
+    nTabID := ObjRow.Values[0]; // id
+
+    // find RowsetID
+    nRowsetID := 0;
+    for ii := 0 to RowTab.Count - 1 do
+    begin
+      RowRow := RowTab.GetItem(ii);
+      if RowRow.Values[2] = nTabID then  // [2] IdMajor
+      begin
+        nRowsetID := RowRow.Values[0]; // [0] RowsetID
+        Break;
+      end;
+    end;
+
+    // find AllocID
+    nAllocID := 0;
+    if nRowsetID <> 0 then
+    begin
+      for ii := 0 to AloTab.Count - 1 do
+      begin
+        AloRow := AloTab.GetItem(ii);
+        if AloRow.Values[2] = nRowsetID then  // [2] OwnerID
+        begin
+          nAllocID := AloRow.Values[0]; // [0] AUID
+          Break;
+        end;
+      end;
+    end;
 
     if nPrevTabID <> nTabID then
     begin
       nPrevTabID := nTabID;
-      TmpTab := FTableList.GetByID(nTabID);
+      if nAllocID <> 0 then
+        TmpTab := FTableList.GetByAllocID(nAllocID);
+      if not Assigned(TmpTab) then
+        TmpTab := FTableList.GetByID(nTabID);
 
       if not Assigned(TmpTab) then
       begin
         TmpTab := TMdfTable.Create();
-        TmpTab.TableName := TmpRow.Values[1]; // name
-        TmpTab.ObjectID := nTabID;
+        //TmpTab.ObjectID := nTabID;
+        //TmpTab.RowsetID := nRowsetID;
+        TmpTab.RowCount := 0;  // was no pages for this table
         // [9] intprop - ColCount
         FTableList.Add(TmpTab);
       end;
+      TmpTab.ObjectID := nTabID;
+      if nAllocID <> 0 then
+        TmpTab.AllocID := nAllocID;
+      TmpTab.TableName := ObjRow.Values[1]; // name
     end;
 
     // find ColRow by TabID
@@ -498,12 +548,74 @@ begin
         TmpTab.AddFieldDef(sColName, nColType, nColLen, nColID);
       end;
     end;
+
+    {$ifdef DEBUG_MDF_RAW_DATA}
+    // set raw data position (for debug)
+    nColPos := 0; // 0-based
+    for ii := Low(TmpTab.FieldsDef) to High(TmpTab.FieldsDef) do
+    begin
+      nColType := TmpTab.FieldDefArr[ii].XType;
+      nColLen := 0;
+      case nColType of
+        MDF_COL_INT:        nColLen := 4;
+        MDF_COL_BIGINT:     nColLen := 8;
+        MDF_COL_SMALLINT:   nColLen := 2;
+        MDF_COL_TINYINT:    nColLen := 1;
+        MDF_COL_DATE:       nColLen := TmpTab.FieldDefArr[ii].Length; // 3
+        MDF_COL_DATETIME:   nColLen := 8;
+        MDF_COL_FLOAT:      nColLen := 8;
+        MDF_COL_BIT:        nColLen := 1; // ??
+        MDF_COL_CHAR:       nColLen := TmpTab.FieldDefArr[ii].Length;
+      end;
+      if nColLen > 0 then
+        TmpTab.FieldsDef[ii].RawOffset := nColPos;
+      Inc(nColPos, nColLen);
+    end;
+    {$endif}
   end;
+
+  // ??? fill from ObjectID
+  if ObjTab.Count = 0 then
+  begin
+    // find ColRow by TabID
+    for ii := 0 to ColTab.Count - 1 do
+    begin
+      ColRow := ColTab.GetItem(ii);
+      nTabID := ColRow.Values[0];
+
+      if nPrevTabID <> nTabID then
+      begin
+        nPrevTabID := nTabID;
+        TmpTab := FTableList.GetByID(nTabID);
+
+        if not Assigned(TmpTab) then
+        begin
+          TmpTab := TMdfTable.Create();
+          TmpTab.TableName := 'oid_' + IntToStr(nTabID); // name
+          TmpTab.ObjectID := nTabID;
+          // [9] intprop - ColCount
+          FTableList.Add(TmpTab);
+        end;
+      end;
+
+      if ColRow.Values[0] = nTabID then
+      begin
+        nColID := ColRow.Values[2]; // colid
+        sColName := ColRow.Values[3]; // name
+        nColType := ColRow.Values[4]; // xtype
+        nColLen :=  ColRow.Values[6]; // length
+        TmpTab.AddFieldDef(sColName, nColType, nColLen, nColID);
+      end;
+    end;
+
+  end;
+
 
   // remove deleted columns
   for i := 0 to FTableList.Count - 1 do
   begin
     TmpTab := FTableList.GetItem(i);
+    SetLength(TmpTab.PageIdArr, TmpTab.PageIdCount);
     SetLength(TmpTab.FieldsDef, Length(TmpTab.FieldDefArr));
     nColCount := 0;
     for ii := 0 to Length(TmpTab.FieldDefArr) - 1 do
@@ -523,6 +635,22 @@ begin
   end;
 
   FTableList.SortByName();
+end;
+
+function TDBReaderMdf.FindPage(APageID: LongWord; AFileID: Word;
+  var APageBuf: TMdfPageBuffer): Boolean;
+var
+  nPagePos: Int64;
+begin
+  Result := False;
+  if APageID = 0 then Exit;
+  nPagePos := APageID * MDF_PAGE_SIZE;
+  if nPagePos + MDF_PAGE_SIZE <= FFile.Size then
+  begin
+    FFile.Position := nPagePos;
+    FFile.Read(FPageBuf, SizeOf(FPageBuf));
+    Result := True;
+  end;
 end;
 
 procedure TDBReaderMdf.InitSystemTables;
@@ -660,13 +788,35 @@ begin
     AddFieldDef('DbFragId', MDF_COL_INT);
   end;
 
+  // MDF_SYS_ALLOCUNITS
+  TmpTab := TMdfTable.Create();
+  FTableList.Add(TmpTab);
+  with TmpTab do
+  begin
+    ObjectID := MDF_SYS_ALLOCUNITS;
+    TableName := 'sys_allocunits';
+    AddFieldDef('AUID', MDF_COL_BIGINT);
+    AddFieldDef('Type', MDF_COL_TINYINT);
+    AddFieldDef('OwnerID', MDF_COL_BIGINT);
+    AddFieldDef('Status', MDF_COL_INT);
+    AddFieldDef('FGID', MDF_COL_SMALLINT);
+    AddFieldDef('PgFirst', MDF_COL_VARBINARY);
+    AddFieldDef('PgRoot', MDF_COL_VARBINARY);
+    AddFieldDef('PgFirstIAM', MDF_COL_VARBINARY);
+    AddFieldDef('PcUsed', MDF_COL_BIGINT);
+    AddFieldDef('PcData', MDF_COL_BIGINT);
+    AddFieldDef('PcReserved', MDF_COL_BIGINT);
+    AddFieldDef('DbFragID', MDF_COL_INT);
+  end;
+
 end;
 
 function TDBReaderMdf.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   hdr: TMdfPageHeaderRec;
   boot_hdr: TMdfBootPageHeaderRec;
-  nPage, nPagePos, nData: Integer;
+  nPage, nData: Integer;
+  nPagePos: Int64;
 begin
   Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
@@ -681,9 +831,8 @@ begin
     // header
     System.Move(FPageBuf, hdr, SizeOf(hdr));
 
-    {$ifdef DEBUG_MDF_PAGE}
-    LogInfo(Format('== Page %d (%s) pos=$%.8x', [nPage, MdfPageTypeToStr(hdr.PageType), nPagePos]));
-    {$endif}
+    if IsDebugPages then
+      LogInfo(Format('== Page %d (%s) pos=$%.8x ObjectID=%d ($%.8x)', [nPage, MdfPageTypeToStr(hdr.PageType), nPagePos, hdr.ObjectID, hdr.ObjectID]));
 
     if hdr.PageType = MDF_PAGE_TYPE_BOOT then
     begin
@@ -718,50 +867,89 @@ begin
   end;
 
   FillTablesList();
+  FIsMetadataLoaded := True;
 end;
 
-procedure TDBReaderMdf.ReadDataPage(const APageBuf: TMdfPageBuffer);
+function TDBReaderMdf.ReadDataPage(const APageBuf: TMdfPageBuffer; ATable: TMdfTable): Boolean;
 var
   hdr: TMdfPageHeaderRec;
   roffs: TMdfRowOffsetArray;
-  i, nRowCount: Integer;
+  i, n, nRowCount: Integer;
   nRowOffs: Word;
+  nAllocID: Int64;
 begin
+  Result := False;
   System.Move(APageBuf, hdr, SizeOf(hdr));
 
-  if not Assigned(FCurTable) or (FCurTable.ObjectID <> hdr.ObjectID) then
-    FCurTable := FTableList.GetByID(hdr.ObjectID);
-  if not Assigned(FCurTable) then
+  // allocation unit ID
+  nAllocID := hdr.IndexID;
+  nAllocID := nAllocID shl 32;
+  nAllocID := nAllocID or hdr.ObjectID;
+  nAllocID := nAllocID shl 16;
+
+  if (hdr.PageType <> MDF_PAGE_TYPE_DATA)
+  or (Assigned(ATable) and (ATable.AllocID <> nAllocID)) then
     Exit;
 
-  {$ifdef DEBUG_MDF_PAGE}
-  LogInfo('HeaderVer=' + IntToStr(hdr.HeaderVer));
-  LogInfo('PageType=' + IntToStr(hdr.PageType));
-  LogInfo('TypeFlagBits=' + IntToStr(hdr.TypeFlagBits));
-  LogInfo('Level=' + IntToStr(hdr.Level));
-  LogInfo('FlagBits=' + IntToStr(hdr.FlagBits));
-  LogInfo('IndexID=' + IntToStr(hdr.IndexID));
-  LogInfo('PrevPageID=$' + IntToHex(hdr.PrevPageID, 8));
-  LogInfo('PrevFileID=$' + IntToHex(hdr.PrevFileID, 8));
-  LogInfo('PMinLen=' + IntToStr(hdr.PMinLen));
-  LogInfo('NextPageID=$' + IntToHex(hdr.NextPageID, 8));
-  LogInfo('NextFileID=$' + IntToHex(hdr.NextFileID, 8));
-  LogInfo('SlotCnt=' + IntToStr(hdr.SlotCnt));
-  LogInfo(Format('ObjectID=%d ($%.8x)', [hdr.ObjectID, hdr.ObjectID]));
-  LogInfo('FreeCnt=' + IntToStr(hdr.FreeCnt));
-  LogInfo('FreeData=' + IntToStr(hdr.FreeData));
-  LogInfo('PageID=$' + IntToHex(hdr.PageID, 8));
-  LogInfo('FileID=$' + IntToHex(hdr.FileID, 8));
-  LogInfo('ReservedCnt=' + IntToStr(hdr.ReservedCnt));
-  LogInfo('LSN1=' + IntToStr(hdr.LSN1));
-  LogInfo('LSN2=' + IntToStr(hdr.LSN2));
-  LogInfo('LSN3=' + IntToStr(hdr.LSN3));
-  LogInfo('XActReserved=' + IntToStr(hdr.XActReserved));
-  LogInfo('XDesIDPart2=' + IntToStr(hdr.XDesIDPart2));
-  LogInfo('XDesIDPart1=' + IntToStr(hdr.XDesIDPart1));
-  LogInfo('GhostRecCnt=' + IntToStr(hdr.GhostRecCnt));
-  LogInfo('Checksum=' + IntToStr(hdr.Checksum));
-  {$endif DEBUG_MDF_PAGE}
+  if not Assigned(FCurTable) or (FCurTable.ObjectID <> hdr.ObjectID) then
+  begin
+    if not FIsMetadataLoaded then
+      FCurTable := FTableList.GetByID(hdr.ObjectID)
+    else
+      FCurTable := FTableList.GetByAllocID(nAllocID)
+  end;
+  if not Assigned(FCurTable) then
+  begin
+    FCurTable := TMdfTable.Create();
+    FCurTable.TableName := Format('i_o_$%.4x_$%.8x_%s', [hdr.IndexID, hdr.ObjectID, IntToHex(nAllocID, 16)]); // name
+    FCurTable.ObjectID := hdr.ObjectID;
+    FCurTable.AllocID := nAllocID;
+    FCurTable.RowCount := -1;
+    FTableList.Add(FCurTable);
+  end;
+
+  if not FIsMetadataLoaded then
+  begin
+    Inc(FCurTable.PageIdCount);
+    if FCurTable.PageIdCount >= Length(FCurTable.PageIdArr) then
+      SetLength(FCurTable.PageIdArr, Length(FCurTable.PageIdArr) + 32);
+    FCurTable.PageIdArr[FCurTable.PageIdCount-1] := hdr.PageID;
+  end;
+
+  // skip reading rows from undefined pages
+  if Length(FCurTable.FieldDefArr) = 0 then
+    Exit;
+
+  if IsDebugPages then
+  begin
+    LogInfo('HeaderVer=' + IntToStr(hdr.HeaderVer));
+    LogInfo('PageType=' + IntToStr(hdr.PageType));
+    LogInfo('TypeFlagBits=' + IntToStr(hdr.TypeFlagBits));
+    LogInfo('Level=' + IntToStr(hdr.Level));
+    LogInfo('FlagBits=' + IntToStr(hdr.FlagBits));
+    LogInfo('IndexID=' + IntToStr(hdr.IndexID));
+    LogInfo('PrevPageID=$' + IntToHex(hdr.PrevPageID, 8));
+    LogInfo('PrevFileID=$' + IntToHex(hdr.PrevFileID, 8));
+    LogInfo('PMinLen=' + IntToStr(hdr.PMinLen));
+    LogInfo('NextPageID=$' + IntToHex(hdr.NextPageID, 8));
+    LogInfo('NextFileID=$' + IntToHex(hdr.NextFileID, 8));
+    LogInfo('SlotCnt=' + IntToStr(hdr.SlotCnt));
+    LogInfo(Format('ObjectID=%d ($%.8x)', [hdr.ObjectID, hdr.ObjectID]));
+    LogInfo('FreeCnt=' + IntToStr(hdr.FreeCnt));
+    LogInfo('FreeData=' + IntToStr(hdr.FreeData));
+    LogInfo('PageID=$' + IntToHex(hdr.PageID, 8));
+    LogInfo('FileID=$' + IntToHex(hdr.FileID, 8));
+    LogInfo('ReservedCnt=' + IntToStr(hdr.ReservedCnt));
+    LogInfo('LSN1=' + IntToStr(hdr.LSN1));
+    LogInfo('LSN2=' + IntToStr(hdr.LSN2));
+    LogInfo('LSN3=' + IntToStr(hdr.LSN3));
+    LogInfo('XActReserved=' + IntToStr(hdr.XActReserved));
+    LogInfo('XDesIDPart2=' + IntToStr(hdr.XDesIDPart2));
+    LogInfo('XDesIDPart1=' + IntToStr(hdr.XDesIDPart1));
+    LogInfo('GhostRecCnt=' + IntToStr(hdr.GhostRecCnt));
+    LogInfo('Checksum=' + IntToStr(hdr.Checksum));
+    LogInfo('---');
+  end;
 
   nRowCount := hdr.SlotCnt;
   SetLength(roffs, nRowCount);
@@ -798,6 +986,7 @@ begin
     Assert(FPagePos + hdr.PMinLen < SizeOf(APageBuf), 'FPagePos=' + IntToStr(FPagePos) + 'GhostRecCnt=' + IntToStr(hdr.GhostRecCnt));
     ReadNextDataRec(hdr.PMinLen, i);
   end;
+  Result := True;
 end;
 
 {procedure TDBReaderMdf.ReadDataRowset(const APageBuf: TMdfPageBuffer; ARowOffs, ARowSize: Integer);
@@ -884,6 +1073,13 @@ begin
   end;
 end;
 
+function TDBReaderMdf.ReadNextCurrency: Currency;
+begin
+  Result := 0;
+  System.Move(FPageBuf[FPagePos], Result, SizeOf(Result));
+  Inc(FPagePos, SizeOf(Result));
+end;
+
 function TDBReaderMdf.ReadNextWord: Word;
 begin
   Result := 0;
@@ -930,7 +1126,7 @@ begin
   // ...
 
   rr.Attrs := ReadByte(FPageBuf, nRowOffs);
-  if rr.Attrs > $30 then
+  if rr.Attrs > $70 then
   begin
     LogInfo(Format('![%.4x] row=%d  hdr.Attrs=$%.2x ', [FPagePos, ARecId, rr.Attrs]));
     Exit;
@@ -996,6 +1192,8 @@ begin
     Exit;
   end;
 
+  // read veriable size columns data
+  // data order may be differ from columns order!
   if (rr.Attrs and MDF_REC_ATTR_VAR_COLUMNS) > 0 then
   begin
     rr.VarCount := ReadWord(FPageBuf, nRowOffs + rr.VarDataOffs);
@@ -1061,9 +1259,14 @@ begin
   SetLength(TmpRow.Values, Length(FCurTable.FieldsDef));
 
   // read columns data
+  {$ifdef DEBUG_MDF_RAW_DATA}
+  FPagePos := nRowOffs + 4;
+  TmpRow.RawData := ReadNextChar(rr.RawDataLen - 4);
+  {$endif}
   FPagePos := nRowOffs + 4;
   iCol := 0;
   iVarCol := 0;
+
   for i := 0 to nFieldCount - 1 do
   begin
     // NULL bitmap
@@ -1080,8 +1283,11 @@ begin
       MDF_COL_BIGINT:     v := ReadNextQWord();
       MDF_COL_SMALLINT:   v := ReadNextWord();
       MDF_COL_TINYINT:    v := ReadNextByte();
+      MDF_COL_DATE:       v := ReadNextDate(FCurTable.FieldDefArr[i].Length);
       MDF_COL_DATETIME:   v := ReadNextDateTime();
       MDF_COL_FLOAT:      v := ReadNextFloat();
+      MDF_COL_MONEY:      v := ReadNextCurrency();
+
       MDF_COL_VARCHAR,
       MDF_COL_NVARCHAR:
       begin
@@ -1094,6 +1300,7 @@ begin
         end;
         Inc(iVarCol);
       end;
+      MDF_COL_BINARY,
       MDF_COL_VARBINARY,
       MDF_COL_IMAGE:
       begin
@@ -1113,9 +1320,14 @@ begin
 
         Inc(iVarCol);
       end;
-      MDF_COL_CHAR:
+      MDF_COL_CHAR,
+      MDF_COL_NCHAR:
       begin
-        v := ReadNextChar(FCurTable.FieldDefArr[i].Length);
+        s := ReadNextChar(FCurTable.FieldDefArr[i].Length);
+        if XType = MDF_COL_NCHAR then
+          v := WideDataToStr(s)
+        else
+          v := s;
       end;
       MDF_COL_BIT:
       begin
@@ -1138,6 +1350,24 @@ begin
   end;
 end;
 
+function TDBReaderMdf.ReadNextDate(ASize: Byte): TDateTime;
+var
+  dd, bt: LongWord;
+  i: Integer;
+begin
+  dd := 0;
+  i := 0;
+  while i < ASize do
+  begin
+    bt := ReadNextByte();
+    bt := bt shl (8 * i);
+    dd := dd or bt;
+    Inc(i);
+  end;
+  Result := dd + 2;
+  Result := IncMonth(Result, -1899*12);
+end;
+
 function TDBReaderMdf.ReadNextDateTime: TDateTime;
 var
   dd: LongInt;
@@ -1146,6 +1376,7 @@ begin
   zz := LongInt(ReadNextDWord());
   dd := LongInt(ReadNextDWord());
   Result := dd + 2;
+  // todo: part of day
 end;
 
 function TDBReaderMdf.ReadNextDWord: LongWord;
@@ -1162,7 +1393,7 @@ begin
   Inc(FPagePos, SizeOf(Result));
 end;
 
-function TDBReaderMdf.ReadNextQWord: UInt64;
+function TDBReaderMdf.ReadNextQWord: Int64;
 begin
   Result := 0;
   System.Move(FPageBuf[FPagePos], Result, SizeOf(Result));
@@ -1172,24 +1403,47 @@ end;
 procedure TDBReaderMdf.ReadMdfTable(AStream: TStream; ATable: TMdfTable; AIndexOnly: Boolean);
 var
   hdr: TMdfPageHeaderRec;
+  nAllocID: Int64;
 begin
   ATable.Clear();
   if Length(ATable.FieldDefArr) = 0 then Exit;
-  FFile.Position := 0;
-  
-  // read pages
-  while FFile.Position + MDF_PAGE_SIZE <= FFile.Size do
-  begin
-    FFile.Read(FPageBuf, SizeOf(FPageBuf));
-    // header
-    System.Move(FPageBuf, hdr, SizeOf(hdr));
 
-    if (hdr.PageType = MDF_PAGE_TYPE_DATA) and (hdr.ObjectID = ATable.ObjectID) then
+//  if (ATable.StartPageID = 0) then
+//  begin
+    // scan for pages
+    FFile.Position := 0;
+    while FFile.Position + MDF_PAGE_SIZE <= FFile.Size do
+    begin
+      FFile.Read(FPageBuf, SizeOf(FPageBuf));
+      // header
+      System.Move(FPageBuf, hdr, SizeOf(hdr));
+      // allocation unit ID
+      nAllocID := hdr.IndexID;
+      nAllocID := nAllocID shl 32;
+      nAllocID := nAllocID or hdr.ObjectID;
+      nAllocID := nAllocID shl 16;
+
+      if (hdr.PageType = MDF_PAGE_TYPE_DATA) and (nAllocID = ATable.AllocID) then
+      begin
+        FCurTable := ATable;
+        if not ReadDataPage(FPageBuf, ATable) then
+          Break;
+      end;
+    end;
+{  end
+  else
+  begin
+    // read pages
+    ATable.NextPageID := ATable.StartPageID;
+    ATable.NextFileID := ATable.StartFileID;
+    while FindPage(ATable.NextPageID, ATable.NextFileID, FPageBuf) do
     begin
       FCurTable := ATable;
-      ReadDataPage(FPageBuf);
+      if not ReadDataPage(FPageBuf, ATable) then
+        Break;
     end;
-  end;
+  end;  }
+
   ATable.RowCount := ATable.Count;
 end;
 
@@ -1199,7 +1453,6 @@ var
   TmpItem: TDbRowItem;
   i: Integer;
 begin
-  GlobDebugMode := 1;
   TmpTable := FTableList.GetByName(AName);
   if Assigned(TmpTable) then
   begin
@@ -1216,6 +1469,9 @@ begin
       TmpItem := TDbRowItem.Create(AList);
       AList.Add(TmpItem);
       TmpItem.Values := TmpTable.GetItem(i).Values;
+      {$ifdef DEBUG_MDF_RAW_DATA}
+      TmpItem.RawData := TmpTable.GetItem(i).RawData;
+      {$endif}
       Inc(i);
     end;
   end;
@@ -1281,7 +1537,20 @@ end;
 
 { TMdfTableList }
 
-function TMdfTableList.GetByID(AObjID: UInt64): TMdfTable;
+function TMdfTableList.GetByAllocID(AAllocID: Int64): TMdfTable;
+var
+  i: Integer;
+begin
+  for i := 0 to Count - 1 do
+  begin
+    Result := GetItem(i);
+    if Result.AllocID = AAllocID then
+      Exit;
+  end;
+  Result := nil;
+end;
+
+function TMdfTableList.GetByID(AObjID: LongWord): TMdfTable;
 var
   i: Integer;
 begin

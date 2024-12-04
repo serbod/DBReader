@@ -10,7 +10,7 @@ Supported databases:
 * MS SQL Server (.MDF, .BAK)
 
 Sample projects:
-* Database browser - browse tables and inpect values
+* Database browser - browse tables and inspect values
 
 Dependencies:
 * DelphiZLib 1.2.8 (optional)
