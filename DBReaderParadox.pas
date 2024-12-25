@@ -358,6 +358,7 @@ begin
         Inc(iRecOffs, FRecSize);
       end;
     end;
+    if Assigned(OnPageReaded) then OnPageReaded(Self);
 
   end;
 

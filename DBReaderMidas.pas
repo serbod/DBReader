@@ -36,6 +36,7 @@ type
   private
     FDbVersion: Integer;
     FColCount: Integer;
+    FRecCount: Cardinal;     // Record count
     FFieldsDef: array of TDSFieldDef;
     FFirstRecPosition: Int64;
 
@@ -44,6 +45,7 @@ type
     function ReadFixSizeData(ASize: Integer): AnsiString;
 
     function ReadInt(ASize: Byte): Integer;
+    function ReadInt64(ASize: Byte): Int64;
     function ReadUInt(ASize: Byte): Cardinal;
     function ReadBool(ASize: Byte): Boolean;
     function ReadFloat(): Double;
@@ -101,7 +103,7 @@ const
   FIELD_TYPE_ADT     = 12; // Abstract Data Type
   FIELD_TYPE_ARRAY   = 13; // Array type (not attribute)
   FIELD_TYPE_NESTED  = 14; // Embedded (nested table type)
-  FIELD_TYPE_REF     = 15; // Referenc
+  FIELD_TYPE_REF     = 15; // Reference
 
   MASK_FIELD_TYPE    = $3F;  // mask to retrieve Field Type
   MASK_VARYNG_FLD    = $40;  // Varying attribute type
@@ -246,6 +248,13 @@ begin
   FFile.ReadBuffer(Result, ASize);
 end;
 
+function TDBReaderMidas.ReadInt64(ASize: Byte): Int64;
+begin
+  Result := 0;
+  Assert(ASize <= 8, 'ReadInt64(' + IntToStr(ASize) + ')');
+  FFile.ReadBuffer(Result, ASize);
+end;
+
 function TDBReaderMidas.ReadUInt(ASize: Byte): Cardinal;
 begin
   Result := 0;
@@ -258,24 +267,15 @@ begin
   Result := (ReadInt(ASize) <> 0);
 end;
 
-function TDBReaderMidas.ReadDate: TDateTime;
-var
-  ts: TTimeStamp;
-begin
-  //Result := ReadInt(4) - 693594;  // Midas epoch
-  ts.Date := ReadInt(4);
-  ts.Time := 0;
-  Result := TimeStampToDateTime(ts);
-end;
-
 procedure TDBReaderMidas.ReadTable(AName: string; ACount: Int64; AList: TDbRowsList);
 var
-  i, iByteOffs, iBitOffs: Integer;
+  i, iByteOffs, iBitOffs, iRowCount: Integer;
   btRecStatus, iByteMask: Byte;
   iStatusBytesCount: Integer;
   FieldsStatus: array of Byte;
   sData: AnsiString;
   TmpRow: TDbRowItem;
+  FieldSize: Word;
 begin
   // columns status bitmap
   iStatusBytesCount := (FColCount div 4);
@@ -298,7 +298,8 @@ begin
 
   FFile.Position := FFirstRecPosition;
   // records
-  while (FFile.Position < FFile.Size) and (ACount > 0) do
+  iRowCount := 0;
+  while (FFile.Position < FFile.Size) and (ACount > 0) and (iRowCount < FRecCount) do
   begin
     // record status
     FFile.ReadBuffer(btRecStatus, SizeOf(btRecStatus));
@@ -323,20 +324,25 @@ begin
         Continue;
       end;
 
-      //FieldsDef[i].FieldSize
+      FieldSize := FFieldsDef[i].FieldSize;
       case (FFieldsDef[i].FieldType and MASK_FIELD_TYPE) of
         FIELD_TYPE_INT:
-          TmpRow.Values[i] := ReadInt(FFieldsDef[i].FieldSize);
+        begin
+          case FieldSize of
+            1, 2, 4: TmpRow.Values[i] := ReadInt(FieldSize);
+            8: TmpRow.Values[i] := ReadInt64(FieldSize);
+          end;
+        end;
         FIELD_TYPE_UINT:
-          TmpRow.Values[i] := ReadUInt(FFieldsDef[i].FieldSize);
+          TmpRow.Values[i] := ReadUInt(FieldSize);
         FIELD_TYPE_BOOL:
-          TmpRow.Values[i] := ReadBool(FFieldsDef[i].FieldSize);
+          TmpRow.Values[i] := ReadBool(FieldSize);
         FIELD_TYPE_FLOAT:
           TmpRow.Values[i] := ReadFloat();
         FIELD_TYPE_BCD:
         begin
           LogInfo(Format('Field %s type BCD not supported', [FFieldsDef[i].FieldName]));
-          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+          FFile.Seek(FieldSize, soFromCurrent);
         end;
         FIELD_TYPE_DATE:
           TmpRow.Values[i] := ReadDate();
@@ -349,10 +355,10 @@ begin
         FIELD_TYPE_BYTES:
         begin
           if (FFieldsDef[i].FieldType and MASK_VARYNG_FLD) > 0 then
-            sData := ReadVarSizeData(FFieldsDef[i].FieldSize)
+            sData := ReadVarSizeData(FieldSize)
           else
           begin
-            sData := ReadFixSizeData(FFieldsDef[i].FieldSize);
+            sData := ReadFixSizeData(FieldSize);
           end;
           TmpRow.Values[i] := sData;
           if not Assigned(AList) then
@@ -361,25 +367,25 @@ begin
         FIELD_TYPE_ADT:
         begin
           LogInfo(Format('Field %s type ADT not supported', [FFieldsDef[i].FieldName]));
-          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+          FFile.Seek(FieldSize, soFromCurrent);
         end;
         FIELD_TYPE_ARRAY:
         begin
           LogInfo(Format('Field %s type ARRAY not supported', [FFieldsDef[i].FieldName]));
-          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+          FFile.Seek(FieldSize, soFromCurrent);
         end;
         FIELD_TYPE_NESTED:
         begin
           LogInfo(Format('Field %s type NESTED not supported', [FFieldsDef[i].FieldName]));
-          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+          FFile.Seek(FieldSize, soFromCurrent);
         end;
         FIELD_TYPE_REF:
         begin
           LogInfo(Format('Field %s type REFERENCE not supported', [FFieldsDef[i].FieldName]));
-          FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+          FFile.Seek(FieldSize, soFromCurrent);
         end;
       else
-        FFile.Seek(FFieldsDef[i].FieldSize, soFromCurrent);
+        FFile.Seek(FieldSize, soFromCurrent);
       end;
     end;
 
@@ -388,9 +394,25 @@ begin
     else
       TmpRow.Free();
 
+    Inc(iRowCount);
     Dec(ACount);
+    if ((iRowCount mod 100) = 0) and Assigned(OnPageReaded) then
+      OnPageReaded(Self);
   end;
 
+end;
+
+function TDBReaderMidas.ReadDate: TDateTime;
+var
+  ts: TTimeStamp;
+begin
+  //Result := ReadInt(4) - 693594;  // Midas epoch
+  ts.Date := ReadInt(4);
+  ts.Time := 0;
+  if ts.Date <= 0 then
+    Result := 0
+  else
+    Result := TimeStampToDateTime(ts);
 end;
 
 function TDBReaderMidas.ReadTime: TDateTime;
@@ -517,6 +539,8 @@ end;
 function TDBReaderMidas.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   //RawData: array [0..2047] of Byte;
+  Signature: Cardinal;
+  iSigPos: Int64;
   PktHead: TDSPacketHeader;
   TmpProp: TDSProp;
   iPropsCount: Word;
@@ -526,11 +550,28 @@ begin
   if not Result then Exit;
   Result := False;
 
+  // find signature
+  Signature := 0;
+  iSigPos := -1;
+  while (Signature <> $BDE01996) and (iSigPos + 4 < FFile.Size) do
+  begin
+    Inc(iSigPos);
+    FFile.Position := iSigPos;
+    FFile.ReadBuffer(Signature, SizeOf(Signature));
+  end;
+  if (Signature <> $BDE01996) then
+  begin
+    LogInfo('BDE01996 Signature not found');
+    Exit;
+  end;
+
   // read header
+  FFile.Position := iSigPos;
   FFile.ReadBuffer(PktHead, SizeOf(PktHead));
 
   FDbVersion := PktHead.Version;
   FColCount := PktHead.FieldCount;
+  FRecCount := PktHead.RecordCount;
 
   // read field defs
   SetLength(FFieldsDef, FColCount);

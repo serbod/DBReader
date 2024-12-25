@@ -62,7 +62,6 @@ begin
   end;
 end;
 
-// Выдает HEX-строку содержимого буфера
 function BufferToHex(const Buffer; BufferSize: Integer): string;
 var
   i: Integer;
@@ -135,30 +134,33 @@ begin
       NewLen := Length(RawData) - NewOffs - 1;
       if (NewOffs <= Length(RawData)) and (NewLen > 0) then
         s := s + BufferToHex(RawData[NewOffs], NewLen);
+    end
+    else if Length(RawData) > 0 then
+    begin
+      s := BufferToHex(RawData[1], Length(RawData));
     end;
   end
   else
   begin
-    NewOffs := RawOffs+1;
     NewLen := RawLen;
-    if NewOffs + NewLen > Length(RawData) then
-      NewLen := Length(RawData) - NewOffs - 1;
+    if RawOffs + NewLen > Length(RawData) then
+      NewLen := Length(RawData) - RawOffs;
 
+    NewOffs := RawOffs+1;
     if NewOffs <= Length(RawData) then
       s := BufferToHex(RawData[NewOffs], NewLen);
   end;
 
+  memoHex.Text := s;
   if RawLen > 0 then
   begin
-    memoHex.Text := s;
-    if RawOffs + 1 + RawLen > Length(RawData) then
+    if RawOffs + RawLen > Length(RawData) then
       memoText.Text := '<bad raw offset/length>'
     else
       memoText.Text := DataAsStr(RawData[RawOffs+1], RawLen);
   end
   else
   begin
-    memoHex.Text := '';
     memoText.Text := '';
   end;
 

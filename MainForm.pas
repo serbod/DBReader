@@ -42,6 +42,7 @@ type
     pmGrid: TPopupMenu;
     miExporttoCSV: TMenuItem;
     miDBGrid1: TMenuItem;
+    miShowAsHex: TMenuItem;
     procedure FormCreate(Sender: TObject);
     procedure dgItemsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
       State: TGridDrawState);
@@ -52,6 +53,7 @@ type
     procedure miExporttoCSVClick(Sender: TObject);
     procedure miDBGrid1Click(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
+    procedure miShowAsHexClick(Sender: TObject);
   private
     { Private declarations }
     FLogStream: TStream;
@@ -63,6 +65,7 @@ type
     FCurColIndex: Integer;
     FDbFileName: string;
     FTableName: string;
+    FShowAsHex: Boolean;  // show numbers as Hex
     procedure OnLogHandler(const S: string);
     function AddTreeNode(AParent: TTreeNode; AName, ATableName, AFileName: string): TMyTreeNode;
     function GetFieldColor(const AField: TDbFieldDefRec): TColor;
@@ -71,7 +74,6 @@ type
     procedure TestDbGrid();
 
     procedure InitReader(AReader: TDBReader); // set reader options
-    procedure FillTreeFB();
     procedure FillTreeByFiles(AFileName: string);
     procedure ShowTable(ATableName: string);
     procedure OpenFB(AFileName: string);
@@ -137,6 +139,13 @@ begin
   ExportGridToCSV();
 end;
 
+procedure TFormMain.miShowAsHexClick(Sender: TObject);
+begin
+  FShowAsHex := not FShowAsHex;
+  miShowAsHex.Checked := FShowAsHex;
+  dgItems.Invalidate();
+end;
+
 procedure TFormMain.btnFileSelectClick(Sender: TObject);
 begin
   if FileOpenDialog.Execute then
@@ -168,7 +177,7 @@ begin
       if TmpField.FieldType <> ftUnknown then
       begin
         FormRawValue.FieldTypeName := TmpField.TypeName;
-        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob];
+        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob, ftBytes, ftVarBytes];
         FormRawValue.ShowValue(TmpRow.RawData, TmpField.RawOffset, TmpField.Size);
       end
       else
@@ -182,7 +191,7 @@ begin
             iOffs := iOffs + FRowsList.FieldsDef[i].Size;
         end;
         FormRawValue.FieldTypeName := TmpField.TypeName;
-        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob];
+        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob, ftBytes, ftVarBytes];
         FormRawValue.ShowValue(TmpRow.RawData, iOffs, TmpField.Size);
       end;
     end;
@@ -200,6 +209,7 @@ var
   TmpField: TDbFieldDefRec;
   //TmpParam: TParam;
   TmpRow: TDbRowItem;
+  TmpInt64: Int64;
   //qr: TPrQuery;
 begin
   c := dgItems.Canvas;
@@ -267,6 +277,7 @@ begin
         begin
           //s := VarToStrDef(TmpRow.Values[ACol], 'null');
           s := TmpRow.GetFieldAsStr(ACol);
+
           if Length(s) > 100 then
             s := Copy(s, 1, 100);
           clText := GetFieldColor(TmpField);
@@ -274,6 +285,15 @@ begin
           if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat, ftCurrency] then
           //if VarIsOrdinal(TmpRow.Data[ACol]) or VarIsFloat(TmpRow.Data[ACol]) then
             tf := [tfRight];
+          // show as hex
+          if FShowAsHex
+          and (TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint])
+          and (not VarIsNull(TmpRow.Values[ACol]))
+          then
+          begin
+            TmpInt64 := TmpRow.Values[ACol];
+            s := Format('%x', [TmpInt64]);
+          end;
         end;
       end;
     end;
@@ -399,37 +419,6 @@ begin
   tvMain.Items.EndUpdate;
 end;
 
-procedure TFormMain.FillTreeFB;
-var
-  tn, tnSys: TMyTreeNode;
-  i: Integer;
-  TmpRel: TRDB_RelationsItem;
-begin
-  if not (FReader is TDBReaderFB) then Exit;
-  tvMain.Items.BeginUpdate();
-  tvMain.Items.Clear();
-  // System tables
-  tnSys := AddTreeNode(nil, 'System tables', '', '');
-  for i := 0 to (FReader as TDBReaderFB).RelationsList.Count - 1 do
-  begin
-    TmpRel := (FReader as TDBReaderFB).RelationsList.GetItem(i) as TRDB_RelationsItem;
-    if TmpRel.RelationID > 50 then
-      Continue;
-    tn := AddTreeNode(tnSys, TmpRel.RelationName, TmpRel.RelationName, '');
-  end;
-
-  // User tables
-  for i := 0 to (FReader as TDBReaderFB).RelationsList.Count - 1 do
-  begin
-    TmpRel := (FReader as TDBReaderFB).RelationsList.GetItem(i) as TRDB_RelationsItem;
-    if TmpRel.RelationID < 50 then
-      Continue;
-    tn := AddTreeNode(nil, TmpRel.RelationName, TmpRel.RelationName, '');
-  end;
-
-  tvMain.Items.EndUpdate();
-end;
-
 procedure TFormMain.FormCreate(Sender: TObject);
 var
   s, sLogName: string;
@@ -451,7 +440,7 @@ begin
     end;
   end;
   memoLog.Clear();
-  FRowsList := TRDB_RowsList.Create(TRDB_TableRowItem);
+  FRowsList := TDbRowsList.Create;
   MaxRows := MaxInt;
   //Test();
   if ParamCount > 0 then
@@ -569,6 +558,11 @@ begin
 end;
 
 procedure TFormMain.OpenFB(AFileName: string);
+var
+  tnParent: TMyTreeNode;
+  i: Integer;
+  //TmpRel: TRDB_RelationsItem;
+  TmpTable: TRDBTable;
 begin
   FReader := TDBReaderFB.Create(Self);
   InitReader(FReader);
@@ -576,12 +570,56 @@ begin
   //FReader.DebugRelID := 12;
   FReader.OpenFile(AFileName);
 
-  FillTreeFB();
+  // FillTreeFB
+  if not (FReader is TDBReaderFB) then Exit;
+  tvMain.Items.BeginUpdate();
+  tvMain.Items.Clear();
+  // System tables
+  tnParent := AddTreeNode(nil, 'System tables', '', '');
+  for i := 0 to (FReader as TDBReaderFB).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderFB).TableList.GetItem(i);
+    if TmpTable.RelationID > 50 then
+      Continue;
+    AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // Empty tables
+  tnParent := AddTreeNode(nil, 'Empty tables', '', '');
+  for i := 0 to (FReader as TDBReaderFB).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderFB).TableList.GetItem(i);
+    if (TmpTable.RelationID > 50) and (TmpTable.RowCount = 0) then
+      AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  {for i := 0 to (FReader as TDBReaderFB).RelationsList.Count - 1 do
+  begin
+    TmpRel := (FReader as TDBReaderFB).RelationsList.GetItem(i) as TRDB_RelationsItem;
+    if TmpRel.RelationID > 50 then
+      Continue;
+    AddTreeNode(tnSys, TmpRel.RelationName, TmpRel.RelationName, '');
+  end; }
+
+  // User tables
+  for i := 0 to (FReader as TDBReaderFB).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderFB).TableList.GetItem(i);
+    if (TmpTable.RelationID > 50) and (TmpTable.RowCount <> 0) then
+      AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  {for i := 0 to (FReader as TDBReaderFB).RelationsList.Count - 1 do
+  begin
+    TmpRel := (FReader as TDBReaderFB).RelationsList.GetItem(i) as TRDB_RelationsItem;
+    if TmpRel.RelationID < 50 then
+      Continue;
+    AddTreeNode(nil, TmpRel.RelationName, TmpRel.RelationName, '');
+  end; }
+
+  tvMain.Items.EndUpdate();
 end;
 
 procedure TFormMain.OpenGsr(AFileName: string);
 var
-  tn, tnSys: TMyTreeNode;
+  tnSys: TMyTreeNode;
   i: Integer;
   TmpTable: TGsrTable;
 begin
@@ -602,7 +640,7 @@ begin
   begin
     TmpTable := (FReader as TDBReaderGsr).TableList.GetItem(i);
     if TmpTable.RowCount > 0 then
-      tn := AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
+      AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
   end;
   // Empty tables
   tnSys := AddTreeNode(nil, 'Empty tables', '', '');
@@ -611,14 +649,14 @@ begin
     TmpTable := (FReader as TDBReaderGsr).TableList.GetItem(i);
     if TmpTable.RowCount > 0 then
       Continue;
-    tn := AddTreeNode(tnSys, TmpTable.TableName, TmpTable.TableName, '');
+    AddTreeNode(tnSys, TmpTable.TableName, TmpTable.TableName, '');
   end;
   tvMain.Items.EndUpdate();
 end;
 
 procedure TFormMain.OpenMdf(AFileName: string; AStream: TStream);
 var
-  tn, tnParent: TMyTreeNode;
+  tnParent: TMyTreeNode;
   i: Integer;
   TmpTable: TMdfTable;
 begin
@@ -638,16 +676,24 @@ begin
   for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
   begin
     TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
-    if (TmpTable.ObjectID > 100) and (TmpTable.RowCount <> 0) then
-      tn := AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
+    if (TmpTable.ObjectID > 100) and (TmpTable.RowCount <> 0) and (Length(TmpTable.FieldsDef) > 0) then
+      AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
   end;
   // Empty tables
   tnParent := AddTreeNode(nil, 'Empty tables', '', '');
   for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
   begin
     TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
-    if (TmpTable.ObjectID > 100) and (TmpTable.RowCount = 0) then
-      tn := AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+    if (TmpTable.ObjectID > 100) and (TmpTable.RowCount = 0) and (Length(TmpTable.FieldsDef) > 0) then
+      AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // Ghost tables
+  tnParent := AddTreeNode(nil, 'Ghost tables', '', '');
+  for i := 0 to (FReader as TDBReaderMdf).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
+    if (TmpTable.ObjectID > 100) and (Length(TmpTable.FieldsDef) = 0) then
+      AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
   end;
   // System tables
   tnParent := AddTreeNode(nil, 'System tables', '', '');
@@ -656,7 +702,7 @@ begin
     TmpTable := (FReader as TDBReaderMdf).TableList.GetItem(i);
     if TmpTable.ObjectID > 100 then
       Continue;
-    tn := AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+    AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
   end;
   tvMain.Items.EndUpdate();
 end;
@@ -679,6 +725,7 @@ begin
   r := TFSReaderMtf.Create();
   try
     r.OnLog := OnLogHandler;
+    r.IsSaveStreams := (FSettings.Values['MtfSaveStreams'] <> '');
     r.OpenFile(AFileName);
     if r.MdfPos > 0 then
     begin
@@ -713,8 +760,13 @@ begin
     if FRowsList.TableName <> ATableName then
     begin
       FRowsList.Clear();
-      FReader.ReadTable(ATableName, MaxRows, FRowsList);
+      try
+        FReader.ReadTable(ATableName, MaxRows, FRowsList);
+      except
+        on E: Exception do ShowException(E, nil);
+      end;
     end;
+    tsGrid.Caption := ATableName + ' [' + IntToStr(FRowsList.Count) + ' rows]';
 
     // prepare grid (table)
     dgItems.DefaultRowHeight := dgItems.Font.Size + 8;

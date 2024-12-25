@@ -584,6 +584,8 @@ begin
       end;
     end;
 
+    if ((n mod 100) = 0) and Assigned(OnPageReaded) then
+      OnPageReaded(Self);
   end;
 end;
 

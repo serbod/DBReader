@@ -52,12 +52,14 @@ type
   TDBReader = class(TComponent)
   protected
     FFile: TStream;
-    FOnLog: TGetStrProc;
     FIsSingleTable: Boolean;
+    FOnLog: TGetStrProc;
+    FOnPageReaded: TNotifyEvent;
 
   public
-    IsDebugPages: Boolean;
-    IsDebugRows: Boolean;
+    IsDebugPages: Boolean;     // debug messages for pages
+    IsDebugRows: Boolean;      // debug messages for rows
+    IsUseRowRawData: Boolean;  // fill TDbRowItem.RawData
     FileName: string;
 
     procedure AfterConstruction(); override;
@@ -72,9 +74,12 @@ type
     // get detailed multi-line description of table
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; virtual;
 
-    property OnLog: TGetStrProc read FOnLog write FOnLog;
     // detabase file contain single table
     property IsSingleTable: Boolean read FIsSingleTable;
+    // messages from reader
+    property OnLog: TGetStrProc read FOnLog write FOnLog;
+    // after portion of data readed, for progress update
+    property OnPageReaded: TNotifyEvent read FOnPageReaded write FOnPageReaded;
   end;
 
   TDbReaderDataSet = class(TDataSet)
@@ -118,14 +123,19 @@ type
   TRawDataReader = record
     Data: AnsiString;
     nPos: Integer;
+    DataPtr: PByte;
 
-    procedure Init(AData: AnsiString; AStartPos: Integer = 0);
+    procedure InitBuf(AData: AnsiString; AStartPos: Integer = 0); overload;
+    procedure Init(const AData); overload;
     function ReadUInt8: Byte;
     function ReadUInt16: Word;
     function ReadUInt32: Cardinal;
+    function ReadUInt64: UInt64;
     function ReadInt8: ShortInt;
     function ReadInt16: SmallInt;
     function ReadInt32: Integer;
+    function ReadInt64: Int64;
+    function ReadBytes(ASize: Integer): AnsiString;
   end;
 
   TInnerFileStream = class(TFileStream)
@@ -145,6 +155,7 @@ procedure StrToStream(AStr: AnsiString; AStream: TStream; AAddLineEnd: Boolean =
 function BufToHex(const Buffer; BufferSize: Integer): string;
 // Example: [01 0A BC]
 function BufferToHex(const Buffer; BufferSize: Integer): string;
+function VarToInt(const AValue: Variant): Integer;
 
 implementation
 
@@ -217,6 +228,13 @@ begin
   Result := Result + ']';
 end;
 
+function VarToInt(const AValue: Variant): Integer;
+begin
+  if VarIsOrdinal(AValue) then
+    Result := AValue
+  else
+    Result := 0;
+end;
 { TDbRowsList }
 
 function TDbRowsList.GetItem(AIndex: Integer): TDbRowItem;
@@ -267,7 +285,18 @@ begin
       Result := FormatDateTime('YYYY-MM-DD HH:NN:SS', dt);
   end
   else
+  if Assigned(Owner) and (Owner.FieldsDef[AFieldIndex].FieldType = ftBytes) then
+  begin
     Result := VarToStrDef(Values[AFieldIndex], '');
+    if Result <> '' then
+      Result := '0x' + BufToHex(Result[1], Length(Result));
+  end
+  else
+  try
+    Result := VarToStrDef(Values[AFieldIndex], '');
+  except
+    Result := '<error>';
+  end;
 end;
 
 { TDBReader }
@@ -501,55 +530,86 @@ end;
 
 { TRawDataReader }
 
-procedure TRawDataReader.Init(AData: AnsiString; AStartPos: Integer);
+procedure TRawDataReader.Init(const AData);
+begin
+  Data := '';
+  DataPtr := @AData;
+end;
+
+procedure TRawDataReader.InitBuf(AData: AnsiString; AStartPos: Integer);
 begin
   Data := AData;
   if AStartPos = 0 then
     nPos := 1
   else
     nPos := AStartPos;
+  DataPtr := @AData[nPos];
+end;
+
+function TRawDataReader.ReadBytes(ASize: Integer): AnsiString;
+begin
+  Result := '';
+  if ASize > 0 then
+  begin
+    SetLength(Result, ASize);
+    Move(DataPtr^, Result[1], ASize);
+  end;
 end;
 
 function TRawDataReader.ReadInt16: SmallInt;
 begin
   Result := 0;
-  Move(Data[nPos], Result, SizeOf(Result));
-  Inc(nPos, SizeOf(Result));
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadInt32: Integer;
 begin
   Result := 0;
-  Move(Data[nPos], Result, SizeOf(Result));
-  Inc(nPos, SizeOf(Result));
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadInt64: Int64;
+begin
+  Result := 0;
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadInt8: ShortInt;
 begin
   Result := 0;
-  Move(Data[nPos], Result, SizeOf(Result));
-  Inc(nPos, SizeOf(Result));
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadUInt16: Word;
 begin
   Result := 0;
-  Move(Data[nPos], Result, SizeOf(Result));
-  Inc(nPos, SizeOf(Result));
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadUInt32: Cardinal;
 begin
   Result := 0;
-  Move(Data[nPos], Result, SizeOf(Result));
-  Inc(nPos, SizeOf(Result));
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadUInt64: UInt64;
+begin
+  Result := 0;
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadUInt8: Byte;
 begin
   Result := 0;
-  Move(Data[nPos], Result, SizeOf(Result));
-  Inc(nPos, SizeOf(Result));
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
 end;
 
 { TInnerFileStream }
@@ -565,6 +625,7 @@ end;
 
 function TInnerFileStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
 begin
+  Result := 0;
   case Origin of
     soBeginning: Result := inherited Seek(InnerFilePos + Offset, Origin);
     soCurrent: Result := inherited Seek(Offset, Origin);

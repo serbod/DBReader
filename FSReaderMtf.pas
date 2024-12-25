@@ -50,6 +50,7 @@ type
 
   public
     FileName: string;
+    IsSaveStreams: Boolean;
 
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
@@ -573,10 +574,8 @@ begin
     begin
       // align to 4 bytes
       FilePosAlign();
-      //{$define MTF_DUMP_MQDA}
-      {$ifdef MTF_DUMP_MQDA}
-      DumpToFile(FFile.Position, hdr_stream.StreamLen, Format('MQDA_%d.data', [FFile.Position]));
-      {$endif}
+      if IsSaveStreams then
+        DumpToFile(FFile.Position, hdr_stream.StreamLen, Format('MQDA_%d.data', [FFile.Position]));
       if (FMQDANum = FMdfNum) and (FMdfSize > 0) and (FMdfName <> '') then
       begin
         FMdfPos := FFile.Position;

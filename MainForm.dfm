@@ -74,7 +74,7 @@ object FormMain: TFormMain
     Top = 0
     Width = 603
     Height = 474
-    ActivePage = tsLog
+    ActivePage = tsGrid
     Align = alClient
     TabOrder = 1
     object tsGrid: TTabSheet
@@ -97,6 +97,10 @@ object FormMain: TFormMain
     object tsTableInfo: TTabSheet
       Caption = 'Table Info'
       ImageIndex = 2
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object memoInfo: TMemo
         AlignWithMargins = True
         Left = 4
@@ -121,6 +125,10 @@ object FormMain: TFormMain
     end
     object tsLog: TTabSheet
       Caption = 'Log'
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object memoLog: TMemo
         AlignWithMargins = True
         Left = 4
@@ -196,6 +204,10 @@ object FormMain: TFormMain
       Caption = 'TestDBGrid'
       Visible = False
       OnClick = miDBGrid1Click
+    end
+    object miShowAsHex: TMenuItem
+      Caption = 'Show numbers as Hex'
+      OnClick = miShowAsHexClick
     end
   end
 end
