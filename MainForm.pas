@@ -10,10 +10,10 @@ License: MIT
 interface
 
 uses
-  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB,
+  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,  Menus,
+  Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
-  DBReaderGsr, DBReaderDbf, FSReaderMtf, DBReaderMdf, Menus;
+  DBReaderGsr, DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb;
 
 type
   TMyTreeNode = class(TTreeNode)
@@ -43,6 +43,7 @@ type
     miExporttoCSV: TMenuItem;
     miDBGrid1: TMenuItem;
     miShowAsHex: TMenuItem;
+    ProgressBar: TProgressBar;
     procedure FormCreate(Sender: TObject);
     procedure dgItemsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
       State: TGridDrawState);
@@ -66,7 +67,7 @@ type
     FDbFileName: string;
     FTableName: string;
     FShowAsHex: Boolean;  // show numbers as Hex
-    procedure OnLogHandler(const S: string);
+    FPrevUpdTC: Int64;  // for progress indicator
     function AddTreeNode(AParent: TTreeNode; AName, ATableName, AFileName: string): TMyTreeNode;
     function GetFieldColor(const AField: TDbFieldDefRec): TColor;
 
@@ -84,6 +85,10 @@ type
     procedure OpenDbf(AFileName: string);
     procedure OpenTape(AFileName: string);
     procedure OpenMdf(AFileName: string; AStream: TStream = nil);
+    procedure OpenMdb(AFileName: string);
+
+    procedure OnLogHandler(const S: string);
+    procedure OnPageReadedHandler(Sender: TObject);
   public
     { Public declarations }
     MaxRows: Integer;
@@ -111,7 +116,7 @@ end;
 function TFormMain.GetFieldColor(const AField: TDbFieldDefRec): TColor;
 begin
   case AField.FieldType of
-    ftString, ftWideString, ftMemo: Result := clGreen;       // string
+    ftString, ftWideString, ftFixedChar, ftFixedWideChar, ftMemo: Result := clGreen; // string
     ftInteger, ftSmallint, ftLargeint: Result := clNavy;  // integer
     ftFloat, ftCurrency: Result := clMaroon; // float
     ftDate, ftTime, ftDateTime, ftTimeStamp: Result := clTeal;     // date
@@ -125,6 +130,7 @@ end;
 procedure TFormMain.InitReader(AReader: TDBReader);
 begin
   AReader.OnLog := OnLogHandler;
+  AReader.OnPageReaded := OnPageReadedHandler;
   AReader.IsDebugPages := (FSettings.Values['DebugPages'] <> '');
   AReader.IsDebugRows := (FSettings.Values['DebugRows'] <> '');
 end;
@@ -464,6 +470,16 @@ begin
     memoLog.Lines.Add(S);
 end;
 
+procedure TFormMain.OnPageReadedHandler(Sender: TObject);
+begin
+  if TickDiff(GetTickCount64, FPrevUpdTC) > 1000 then
+  begin
+    FPrevUpdTC := GetTickCount64;
+    ProgressBar.Position := FReader.GetProgress();
+    Application.ProcessMessages();
+  end;
+end;
+
 procedure TFormMain.OpenBDB(AFileName: string);
 begin
   if FileExists(AFileName) then
@@ -516,6 +532,7 @@ begin
 
   sExt := LowerCase(ExtractFileExt(FDbFileName));
 
+  ProgressBar.Visible := True;
   memoLog.Lines.BeginUpdate();
   memoLog.Lines.Clear();
   FreeAndNil(FReader);
@@ -539,10 +556,14 @@ begin
       OpenTape(FDbFileName)
     else
     if (sExt = '.mdf') then
-      OpenMdf(FDbFileName);
+      OpenMdf(FDbFileName)
+    else
+    if (sExt = '.mdb') or (sExt = '.accdb') then
+      OpenMdb(FDbFileName);
   finally
     memoLog.Lines.EndUpdate();
   end;
+  ProgressBar.Visible := False;
 end;
 
 procedure TFormMain.OpenDbf(AFileName: string);
@@ -654,6 +675,58 @@ begin
   tvMain.Items.EndUpdate();
 end;
 
+procedure TFormMain.OpenMdb(AFileName: string);
+var
+  tnParent: TMyTreeNode;
+  i: Integer;
+  TmpTable: TMdbTableInfo;
+begin
+  FReader := TDBReaderMdb.Create(Self);
+  InitReader(FReader);
+  try
+    FReader.OpenFile(AFileName);
+  except
+    on E: Exception do
+      memoInfo.Lines.Append(E.Message);
+  end;
+
+  // Fill tree
+  tvMain.Items.BeginUpdate();
+  tvMain.Items.Clear();
+  // tables
+  for i := 0 to (FReader as TDBReaderMdb).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdb).TableList.GetItem(i);
+    if (TmpTable.TableType <> 'S') and (TmpTable.RowCount <> 0) and (Length(TmpTable.FieldsDef) > 0) then
+      AddTreeNode(nil, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // Empty tables
+  tnParent := AddTreeNode(nil, 'Empty tables', '', '');
+  for i := 0 to (FReader as TDBReaderMdb).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdb).TableList.GetItem(i);
+    if (TmpTable.TableType <> 'S') and (TmpTable.RowCount = 0) and (Length(TmpTable.FieldsDef) > 0) then
+      AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // Ghost tables
+  tnParent := AddTreeNode(nil, 'Ghost tables', '', '');
+  for i := 0 to (FReader as TDBReaderMdb).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdb).TableList.GetItem(i);
+    if (TmpTable.TableType <> 'S') and (Length(TmpTable.FieldsDef) = 0) then
+      AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  // System tables
+  tnParent := AddTreeNode(nil, 'System tables', '', '');
+  for i := 0 to (FReader as TDBReaderMdb).TableList.Count - 1 do
+  begin
+    TmpTable := (FReader as TDBReaderMdb).TableList.GetItem(i);
+    if TmpTable.TableType = 'S' then
+      AddTreeNode(tnParent, TmpTable.TableName, TmpTable.TableName, '');
+  end;
+  tvMain.Items.EndUpdate();
+end;
+
 procedure TFormMain.OpenMdf(AFileName: string; AStream: TStream);
 var
   tnParent: TMyTreeNode;
@@ -760,11 +833,13 @@ begin
     if FRowsList.TableName <> ATableName then
     begin
       FRowsList.Clear();
+      ProgressBar.Visible := True;
       try
         FReader.ReadTable(ATableName, MaxRows, FRowsList);
       except
         on E: Exception do ShowException(E, nil);
       end;
+      ProgressBar.Visible := False;
     end;
     tsGrid.Caption := ATableName + ' [' + IntToStr(FRowsList.Count) + ' rows]';
 

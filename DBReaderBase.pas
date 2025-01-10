@@ -73,6 +73,8 @@ type
     procedure ReadTable(AName: string; ACount: Int64 = MaxInt; AList: TDbRowsList = nil); virtual; abstract;
     // get detailed multi-line description of table
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; virtual;
+    // get progress value 0..1000
+    function GetProgress(): Integer; virtual;
 
     // detabase file contain single table
     property IsSingleTable: Boolean read FIsSingleTable;
@@ -123,10 +125,13 @@ type
   TRawDataReader = record
     Data: AnsiString;
     nPos: Integer;
+    StartPtr: PByte;
     DataPtr: PByte;
 
     procedure InitBuf(AData: AnsiString; AStartPos: Integer = 0); overload;
     procedure Init(const AData); overload;
+    procedure SetPosition(AOffset: Integer); // 0-based from initial position
+    function GetPosition(): Integer; // 0-based from initial position
     function ReadUInt8: Byte;
     function ReadUInt16: Word;
     function ReadUInt32: Cardinal;
@@ -135,7 +140,11 @@ type
     function ReadInt16: SmallInt;
     function ReadInt32: Integer;
     function ReadInt64: Int64;
+    function ReadCurrency: Currency;
+    function ReadSingle: Single;
+    function ReadDouble: Double;
     function ReadBytes(ASize: Integer): AnsiString;
+    procedure ReadToBuffer(var ABuf; ASize: Integer);
   end;
 
   TInnerFileStream = class(TFileStream)
@@ -156,6 +165,9 @@ function BufToHex(const Buffer; BufferSize: Integer): string;
 // Example: [01 0A BC]
 function BufferToHex(const Buffer; BufferSize: Integer): string;
 function VarToInt(const AValue: Variant): Integer;
+// Raw data as printable text, non-printable chars replaced by dots
+function DataAsStr(const AData; ALen: Integer): string;
+
 
 implementation
 
@@ -235,6 +247,23 @@ begin
   else
     Result := 0;
 end;
+
+function DataAsStr(const AData; ALen: Integer): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  if ALen = 0 then Exit;
+
+  SetLength(Result, ALen);
+  Move(AData, Result[1], ALen);
+  for i := 1 to ALen do
+  begin
+    if Ord(Result[i]) < 32 then
+      Result[i] := '.';
+  end;
+end;
+
 { TDbRowsList }
 
 function TDbRowsList.GetItem(AIndex: Integer): TDbRowItem;
@@ -277,6 +306,10 @@ begin
   if VarIsType(Values[AFieldIndex], varDate) then
   begin
     dt := Values[AFieldIndex];
+    if dt > MaxDateTime then
+      dt := MaxDateTime;
+    if dt < MinDateTime then
+      dt := MinDateTime;
     if Trunc(dt) = 0 then
       Result := FormatDateTime('HH:NN:SS', dt)
     else if Frac(dt) = 0 then
@@ -315,6 +348,11 @@ end;
 function TDBReader.FillTableInfoText(ATableName: string; ALines: TStrings): Boolean;
 begin
   Result := False;
+end;
+
+function TDBReader.GetProgress: Integer;
+begin
+  Result := Trunc(FFile.Position / (FFile.Size + 1) * 1000);
 end;
 
 procedure TDBReader.LogInfo(AStr: string);
@@ -533,6 +571,7 @@ end;
 procedure TRawDataReader.Init(const AData);
 begin
   Data := '';
+  StartPtr := @AData;
   DataPtr := @AData;
 end;
 
@@ -543,6 +582,7 @@ begin
     nPos := 1
   else
     nPos := AStartPos;
+  StartPtr := @AData[nPos];
   DataPtr := @AData[nPos];
 end;
 
@@ -553,6 +593,7 @@ begin
   begin
     SetLength(Result, ASize);
     Move(DataPtr^, Result[1], ASize);
+    Inc(DataPtr, ASize);
   end;
 end;
 
@@ -611,6 +652,46 @@ begin
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
 end;
+
+function TRawDataReader.ReadCurrency: Currency;
+begin
+  Result := 0;
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadSingle: Single;
+begin
+  Result := 0;
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
+end;
+
+function TRawDataReader.ReadDouble: Double;
+begin
+  Result := 0;
+  Move(DataPtr^, Result, SizeOf(Result));
+  Inc(DataPtr, SizeOf(Result));
+end;
+
+procedure TRawDataReader.ReadToBuffer(var ABuf; ASize: Integer);
+begin
+  Move(DataPtr^, ABuf, ASize);
+  Inc(DataPtr, ASize);
+end;
+
+procedure TRawDataReader.SetPosition(AOffset: Integer);
+begin
+  DataPtr := StartPtr;
+  Inc(DataPtr, AOffset);
+end;
+
+function TRawDataReader.GetPosition: Integer;
+begin
+  // todo: native
+  Result := Integer(DataPtr) - Integer(StartPtr);
+end;
+
 
 { TInnerFileStream }
 

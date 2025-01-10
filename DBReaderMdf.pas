@@ -921,6 +921,7 @@ begin
     end;
 
     Inc(nPage);
+    if Assigned(OnPageReaded) then OnPageReaded(Self);
   end;
 
   SetLength(FTextPageIdArr, FTextPageCount);
@@ -951,8 +952,8 @@ begin
   if (hdr.PageType <> MDF_PAGE_TYPE_DATA)
   or (Assigned(ATable) and (ATable.AllocID <> nAllocID) and (ATable.TableType <> 'S')) then
   begin
-    Assert(False, 'Page AllocID not same!');
-    Exit;
+    //Assert(False, 'Page AllocID not same!');
+    //Exit;
   end;
 
   if not Assigned(FCurTable) or (FCurTable.ObjectID <> hdr.ObjectID) then
@@ -1051,7 +1052,6 @@ begin
     Assert(FPagePos + hdr.PMinLen < SizeOf(APageBuf), 'FPagePos=' + IntToStr(FPagePos) + 'GhostRecCnt=' + IntToStr(hdr.GhostRecCnt));
     ReadNextDataRec(hdr.PMinLen, i, AList);
   end;
-  if Assigned(OnPageReaded) then OnPageReaded(Self);
   Result := True;
 end;
 
@@ -1824,6 +1824,7 @@ begin
             nPagePos := TmpTable.PageIdArr[i] * MDF_PAGE_SIZE;
             FCurTable := TmpTable;
             ReadDataPage(FPageBuf, nPagePos, TmpTable, AList);
+            if Assigned(OnPageReaded) then OnPageReaded(Self);
           end
           else
           begin

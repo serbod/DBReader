@@ -155,7 +155,7 @@ begin
   if RawLen > 0 then
   begin
     if RawOffs + RawLen > Length(RawData) then
-      memoText.Text := '<bad raw offset/length>'
+      memoText.Text := Format('<RawLen=%d Offset=%d Length=%d>', [Length(RawData), RawOffs, RawLen])
     else
       memoText.Text := DataAsStr(RawData[RawOffs+1], RawLen);
   end

@@ -13,6 +13,9 @@ object FormMain: TFormMain
   OldCreateOrder = False
   OnCreate = FormCreate
   OnDestroy = FormDestroy
+  DesignSize = (
+    792
+    474)
   PixelsPerInch = 96
   TextHeight = 16
   object spl1: TSplitter
@@ -97,10 +100,6 @@ object FormMain: TFormMain
     object tsTableInfo: TTabSheet
       Caption = 'Table Info'
       ImageIndex = 2
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoInfo: TMemo
         AlignWithMargins = True
         Left = 4
@@ -125,10 +124,6 @@ object FormMain: TFormMain
     end
     object tsLog: TTabSheet
       Caption = 'Log'
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoLog: TMemo
         AlignWithMargins = True
         Left = 4
@@ -154,12 +149,23 @@ object FormMain: TFormMain
       end
     end
   end
+  object ProgressBar: TProgressBar
+    Left = 584
+    Top = 4
+    Width = 200
+    Height = 17
+    Anchors = [akTop, akRight]
+    Max = 1000
+    Smooth = True
+    TabOrder = 2
+    Visible = False
+  end
   object FileOpenDialog: TFileOpenDialog
     FavoriteLinks = <>
     FileTypes = <
       item
         DisplayName = 'Database files'
-        FileMask = '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak'
+        FileMask = '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak;*.mdb;*.accdb'
       end
       item
         DisplayName = 'Interbase/Firebird files (*.gdb, *.fdb)'
@@ -184,6 +190,10 @@ object FormMain: TFormMain
       item
         DisplayName = 'MS SQL (*.mdf, *.bak)'
         FileMask = '*.mdf;*.bak'
+      end
+      item
+        DisplayName = 'MS Access/Jet (*.mdb, *.accdb)'
+        FileMask = '*.mdb;*.accdb'
       end
       item
         DisplayName = 'All files (*.*)'
