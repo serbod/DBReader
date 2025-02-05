@@ -13,7 +13,9 @@ uses
   DBReaderDbf in 'DBReaderDbf.pas',
   FSReaderMtf in 'FSReaderMtf.pas',
   DBReaderMdf in 'DBReaderMdf.pas',
-  DBReaderMdb in 'DBReaderMdb.pas';
+  DBReaderMdb in 'DBReaderMdb.pas',
+  FSReaderPst in 'FSReaderPst.pas',
+  FSReaderBase in 'FSReaderBase.pas';
 
 {$R *.res}
 

@@ -167,6 +167,8 @@ function BufferToHex(const Buffer; BufferSize: Integer): string;
 function VarToInt(const AValue: Variant): Integer;
 // Raw data as printable text, non-printable chars replaced by dots
 function DataAsStr(const AData; ALen: Integer): string;
+// 2-byte data to string
+function WideDataToStr(AData: AnsiString): string;
 
 
 implementation
@@ -262,6 +264,20 @@ begin
     if Ord(Result[i]) < 32 then
       Result[i] := '.';
   end;
+end;
+
+function WideDataToStr(AData: AnsiString): string;
+var
+  ws: WideString;
+begin
+  if Length(AData) > 0 then
+  begin
+    SetLength(ws, Length(AData) div 2);
+    System.Move(AData[1], ws[1], Length(AData));
+    Result := ws;
+  end
+  else
+    Result := '';
 end;
 
 { TDbRowsList }

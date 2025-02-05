@@ -165,7 +165,9 @@ object FormMain: TFormMain
     FileTypes = <
       item
         DisplayName = 'Database files'
-        FileMask = '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak;*.mdb;*.accdb'
+        FileMask = 
+          '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak;*.mdb;*.accdb;*.p' +
+          'st'
       end
       item
         DisplayName = 'Interbase/Firebird files (*.gdb, *.fdb)'
@@ -194,6 +196,10 @@ object FormMain: TFormMain
       item
         DisplayName = 'MS Access/Jet (*.mdb, *.accdb)'
         FileMask = '*.mdb;*.accdb'
+      end
+      item
+        DisplayName = 'MS Outlook (*.pst)'
+        FileMask = '*.pst'
       end
       item
         DisplayName = 'All files (*.*)'

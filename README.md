@@ -7,13 +7,13 @@ Supported databases:
 * Midas.dll/DataSnap/ClientDataSet (.CDS)
 * Paradox 3.0 up to 7.x (.DB)
 * dBASE/FoxPRO (.DBF)
-* MS SQL Server (.MDF, .BAK)
 * Mapsoft data export (.GSR)
+* MS SQL Server (.MDF, .BAK)
 * MS Access/MS Jet 4 (.MDB, .ACCDB)
+* MS Outlook (.PST)
 
 Sample projects:
-* Database browser - browse tables and inpect values
+* Database browser - browse tables and inspect values
 
 Dependencies:
-* NovaLib (logger, RFUtils, MemStreams) - https://github.com/serbod/NovaLib
 * DelphiZLib 1.2.8 (optional)

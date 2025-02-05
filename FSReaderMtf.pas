@@ -15,7 +15,7 @@ http://laytongraphics.com/mtf/MTF_100a.PDF
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes, FSReaderBase;
 
 type
   TMtfAddr = packed record
@@ -23,9 +23,8 @@ type
     Offs: Word;
   end;
 
-  TFSReaderMtf = class(TObject)
+  TFSReaderMtf = class(TFSReader)
   private
-    FFile: TStream;
     FBlockPos: Int64;
     FBlockSize: Integer;
     FStrType: Byte;
@@ -38,8 +37,6 @@ type
     FMdfSize: Int64;
     FMdfName: string;
 
-    FOnLog: TGetStrProc;
-
     // Align position in file by 4 byte
     procedure FilePosAlign();
     // if Result = True, set FBlockPos to next block
@@ -49,15 +46,9 @@ type
     procedure DumpToFile(APos, ASize: Int64; AFileName: string);
 
   public
-    FileName: string;
     IsSaveStreams: Boolean;
 
-    procedure AfterConstruction(); override;
-    procedure BeforeDestruction(); override;
-
-    function OpenFile(AFileName: string): Boolean; virtual;
-    procedure LogInfo(AStr: string); virtual;
-    property OnLog: TGetStrProc read FOnLog write FOnLog;
+    function OpenFile(AFileName: string; AStream: TStream = nil): Boolean; override;
 
     property MdfPos: Int64 read FMdfPos;
     property MdfSize: Int64 read FMdfSize;
@@ -235,17 +226,6 @@ const
 
 { TFSReaderMtf }
 
-procedure TFSReaderMtf.AfterConstruction;
-begin
-  inherited;
-end;
-
-procedure TFSReaderMtf.BeforeDestruction;
-begin
-  FreeAndNil(FFile);
-  inherited;
-end;
-
 procedure TFSReaderMtf.DumpToFile(APos, ASize: Int64; AFileName: string);
 var
   PrevPos: Int64;
@@ -278,15 +258,7 @@ begin
     FFile.Position := nPos + (4-(nPos mod 4));
 end;
 
-procedure TFSReaderMtf.LogInfo(AStr: string);
-begin
-  if Assigned(OnLog) then OnLog(AStr);
-  {if AStr <> '' then
-    FFileLog.Write(AStr[1], Length(AStr));
-  FFileLog.Write(sLineBreak[1], Length(sLineBreak));  }
-end;
-
-function TFSReaderMtf.OpenFile(AFileName: string): Boolean;
+function TFSReaderMtf.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   hdr: TMtfBlockHeader;
   hdr_tape: TMtfTapeHeader;
@@ -299,6 +271,9 @@ var
   NextBlockPos: Int64;
   IsEndOfBlock: Boolean;
 begin
+  Result := inherited OpenFile(AFileName, AStream);
+  if not Result then Exit;
+  
   Result := False;
   FMQDANum := 0;
   FMdfNum := 0;
@@ -306,9 +281,6 @@ begin
   FMdfSize := 0;
   FMdfName := '';
 
-  if not FileExists(AFileName) then Exit;
-  FFile := TFileStream.Create(AFileName, fmOpenRead + fmShareDenyNone);
-  FileName := AFileName;
   FBlockPos := 0;
   LogInfo(Format('==== File %s  Size=%d', [FileName, FFile.Size]));
 
