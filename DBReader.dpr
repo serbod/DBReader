@@ -9,13 +9,13 @@ uses
   DBReaderMidas in 'DBReaderMidas.pas',
   DBReaderParadox in 'DBReaderParadox.pas',
   DBReaderBase in 'DBReaderBase.pas',
-  DBReaderGsr in 'DBReaderGsr.pas',
   DBReaderDbf in 'DBReaderDbf.pas',
   FSReaderMtf in 'FSReaderMtf.pas',
   DBReaderMdf in 'DBReaderMdf.pas',
   DBReaderMdb in 'DBReaderMdb.pas',
   FSReaderPst in 'FSReaderPst.pas',
-  FSReaderBase in 'FSReaderBase.pas';
+  FSReaderBase in 'FSReaderBase.pas',
+  DBReaderEdb in 'DBReaderEdb.pas';
 
 {$R *.res}
 

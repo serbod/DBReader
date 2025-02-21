@@ -100,6 +100,10 @@ object FormMain: TFormMain
     object tsTableInfo: TTabSheet
       Caption = 'Table Info'
       ImageIndex = 2
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object memoInfo: TMemo
         AlignWithMargins = True
         Left = 4
@@ -124,6 +128,10 @@ object FormMain: TFormMain
     end
     object tsLog: TTabSheet
       Caption = 'Log'
+      ExplicitLeft = 0
+      ExplicitTop = 0
+      ExplicitWidth = 0
+      ExplicitHeight = 0
       object memoLog: TMemo
         AlignWithMargins = True
         Left = 4
@@ -160,55 +168,6 @@ object FormMain: TFormMain
     TabOrder = 2
     Visible = False
   end
-  object FileOpenDialog: TFileOpenDialog
-    FavoriteLinks = <>
-    FileTypes = <
-      item
-        DisplayName = 'Database files'
-        FileMask = 
-          '*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak;*.mdb;*.accdb;*.p' +
-          'st'
-      end
-      item
-        DisplayName = 'Interbase/Firebird files (*.gdb, *.fdb)'
-        FileMask = '*.gdb;*.fdb'
-      end
-      item
-        DisplayName = 'Midas/DataSnap files (*.cds)'
-        FileMask = '*.cds'
-      end
-      item
-        DisplayName = 'Paradox files (*.db)'
-        FileMask = '*.db'
-      end
-      item
-        DisplayName = 'Mapsoft GSR files (*.gsr)'
-        FileMask = '*.gsr'
-      end
-      item
-        DisplayName = 'DBF (*.dbf)'
-        FileMask = '*.dbf'
-      end
-      item
-        DisplayName = 'MS SQL (*.mdf, *.bak)'
-        FileMask = '*.mdf;*.bak'
-      end
-      item
-        DisplayName = 'MS Access/Jet (*.mdb, *.accdb)'
-        FileMask = '*.mdb;*.accdb'
-      end
-      item
-        DisplayName = 'MS Outlook (*.pst)'
-        FileMask = '*.pst'
-      end
-      item
-        DisplayName = 'All files (*.*)'
-        FileMask = '*.*'
-      end>
-    Options = []
-    Left = 100
-    Top = 4
-  end
   object pmGrid: TPopupMenu
     Left = 372
     Top = 172
@@ -225,5 +184,15 @@ object FormMain: TFormMain
       Caption = 'Show numbers as Hex'
       OnClick = miShowAsHexClick
     end
+  end
+  object OpenDialog: TOpenDialog
+    Filter = 
+      'Database files|*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak;*.' +
+      'mdb;*.accdb;*.pst|Interbase/Firebird files (*.gdb, *.fdb)|*.gdb;' +
+      '*.fdb|Midas/DataSnap files (*.cds)|*.cds|Paradox files (*.db)|*.' +
+      'db|Mapsoft GSR files (*.gsr)|*.gsr|dBase/FoxPro (*.dbf)|*.dbf|MS' +
+      ' SQL (*.mdf, *.bak)|*.mdf;*.bak|MS Access/Jet (*.mdb, *.accdb)|*' +
+      '.mdb;*.accdb|MS Outlook (*.pst)|*.pst|All files (*.*)|*.*'
+    Left = 124
   end
 end

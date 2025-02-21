@@ -45,6 +45,12 @@ type
     FieldsDef: array of TDbFieldDefRec;
     TableName: string;
     function GetItem(AIndex: Integer): TDbRowItem;
+    // contain no rows
+    function IsEmpty(): Boolean; virtual;
+    // predefined table
+    function IsSystem(): Boolean; virtual;
+    // not defined in metadata
+    function IsGhost(): Boolean; virtual;
   end;
 
   { DB reader base class }
@@ -75,6 +81,11 @@ type
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; virtual;
     // get progress value 0..1000
     function GetProgress(): Integer; virtual;
+
+    // get tables count
+    function GetTablesCount(): Integer; virtual;
+    // get table by index 0..GetTablesCount()-1
+    function GetTableByIndex(AIndex: Integer): TDbRowsList; virtual;
 
     // detabase file contain single table
     property IsSingleTable: Boolean read FIsSingleTable;
@@ -287,6 +298,21 @@ begin
   Result := TDbRowItem(Get(AIndex));
 end;
 
+function TDbRowsList.IsEmpty: Boolean;
+begin
+  Result := (Count > 0);
+end;
+
+function TDbRowsList.IsGhost: Boolean;
+begin
+  Result := False;
+end;
+
+function TDbRowsList.IsSystem: Boolean;
+begin
+  Result := False;
+end;
+
 procedure TDbRowsList.Notify(Ptr: Pointer; Action: TListNotification);
 begin
   inherited;
@@ -369,6 +395,16 @@ end;
 function TDBReader.GetProgress: Integer;
 begin
   Result := Trunc(FFile.Position / (FFile.Size + 1) * 1000);
+end;
+
+function TDBReader.GetTableByIndex(AIndex: Integer): TDbRowsList;
+begin
+  Result := nil;
+end;
+
+function TDBReader.GetTablesCount: Integer;
+begin
+  Result := 0;
 end;
 
 procedure TDBReader.LogInfo(AStr: string);

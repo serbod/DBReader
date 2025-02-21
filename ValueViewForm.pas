@@ -4,13 +4,12 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, ExtCtrls;
+  Dialogs, StdCtrls, ExtCtrls, Grids;
 
 type
   TFormRawValue = class(TForm)
     panTop: TPanel;
     panDataView: TPanel;
-    memoHex: TMemo;
     memoText: TMemo;
     lbTypeText: TLabel;
     lbType: TLabel;
@@ -20,10 +19,17 @@ type
     lbRawOffsText: TLabel;
     lbRawOffs: TLabel;
     chkValue: TCheckBox;
+    dgHex: TDrawGrid;
     procedure chkFullRawClick(Sender: TObject);
     procedure chkValueClick(Sender: TObject);
+    procedure dgHexDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
+      State: TGridDrawState);
+    procedure memoTextChange(Sender: TObject);
+    procedure memoTextKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
   private
     { Private declarations }
+    FSelOffs: Integer;  // offset to selected text
+    FSelSize: Integer;  // size of selected text
   public
     { Public declarations }
     Value: Variant;
@@ -89,11 +95,83 @@ begin
   UpdateView();
 end;
 
+procedure TFormRawValue.dgHexDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
+  State: TGridDrawState);
+var
+  c: TCanvas;
+  s: string;
+  clText, clFill: TColor;
+  {$ifdef FPC}
+  ts: TTextStyle;
+  {$else}
+  tf: TTextFormat;
+  {$endif}
+  iPos: Integer;
+begin
+  c := dgHex.Canvas;
+  clText := clWindowText;
+  clFill := clWindow;
+
+  if ACol = 0 then
+  begin
+    s := IntToHex(ARow * 8, 4);
+    clFill := dgHex.FixedColor;
+  end
+  else
+  begin
+    iPos := (ARow * 8) + ACol-1;
+    if (iPos < Length(RawData)) then
+      s := IntToHex(Ord(RawData[iPos+1]), 2)
+    else
+      s := '';
+
+    if (iPos >= RawOffs) and (iPos < RawOffs + RawLen) then
+      clFill := clYellow;
+
+    if (iPos >= FSelOffs) and (iPos < FSelOffs + FSelSize) then
+      //clFill := clSkyBlue;
+      clFill := clMoneyGreen;
+  end;
+
+  // draw cell
+  if c.Brush.Color <> clFill then
+  begin
+    c.Brush.Color := clFill;
+    c.FillRect(Rect);
+  end;
+  c.Font.Color := clText;
+  Rect.Left := Rect.Left + 2;
+  Rect.Right := Rect.Right - 2;
+  {$ifdef FPC}
+  c.TextRect(Rect, Rect.Left, Rect.Top, s, ts);
+  {$else}
+  c.TextRect(Rect, s, tf);
+  {$endif}
+end;
+
+procedure TFormRawValue.memoTextChange(Sender: TObject);
+begin
+  FSelOffs := memoText.SelStart;
+  FSelSize := memoText.SelLength;
+  dgHex.Invalidate();
+end;
+
+procedure TFormRawValue.memoTextKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  memoTextChange(nil);
+end;
+
 procedure TFormRawValue.ShowValue(ARawData: AnsiString; ARawOffs, ARawLen: Integer);
 begin
   RawData := Copy(ARawData, 1, MaxInt);
   RawOffs := ARawOffs;
   RawLen := ARawLen;
+  FSelOffs := 0;
+  FSelSize := 0;
+
+  dgHex.ColWidths[0] := 40;
+  dgHex.RowCount := (Length(RawData) div 8) + 1;
+
   UpdateView();
   Show();
 end;
@@ -151,7 +229,10 @@ begin
       s := BufferToHex(RawData[NewOffs], NewLen);
   end;
 
-  memoHex.Text := s;
+  //memoHex.Text := s;
+  if chkFullRaw.Checked and (Length(RawData) > 0) then
+    memoText.Text := DataAsStr(RawData[1], Length(RawData))
+  else
   if RawLen > 0 then
   begin
     if RawOffs + RawLen > Length(RawData) then
@@ -167,14 +248,15 @@ begin
   if chkValue.Checked then
   begin
     s := VarToStr(Value);
-    if s <> '' then
-      memoHex.Text := BufferToHex(s[1], Length(s));
+    //if s <> '' then
+    //  memoHex.Text := BufferToHex(s[1], Length(s));
 
     if IsBlob and (s <> '') then
       memoText.Text := DataAsStr(s[1], Length(s))
     else
       memoText.Text := s;
   end;
+  dgHex.Invalidate();
 end;
 
 end.

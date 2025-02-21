@@ -3,7 +3,7 @@ object FormRawValue: TFormRawValue
   Top = 0
   Caption = 'Raw value'
   ClientHeight = 300
-  ClientWidth = 489
+  ClientWidth = 515
   Color = clBtnFace
   Font.Charset = DEFAULT_CHARSET
   Font.Color = clWindowText
@@ -16,10 +16,11 @@ object FormRawValue: TFormRawValue
   object panTop: TPanel
     Left = 0
     Top = 0
-    Width = 489
+    Width = 515
     Height = 53
     Align = alTop
     TabOrder = 0
+    ExplicitWidth = 489
     object lbTypeText: TLabel
       Left = 16
       Top = 8
@@ -102,36 +103,45 @@ object FormRawValue: TFormRawValue
   object panDataView: TPanel
     Left = 0
     Top = 53
-    Width = 489
+    Width = 515
     Height = 247
     Align = alClient
     TabOrder = 1
-    object memoHex: TMemo
+    ExplicitWidth = 489
+    object memoText: TMemo
+      Left = 221
+      Top = 1
+      Width = 293
+      Height = 245
+      Align = alClient
+      Lines.Strings = (
+        'memoText')
+      TabOrder = 0
+      OnClick = memoTextChange
+      OnKeyDown = memoTextKeyDown
+      ExplicitLeft = 201
+      ExplicitWidth = 287
+    end
+    object dgHex: TDrawGrid
       Left = 1
       Top = 1
-      Width = 200
+      Width = 220
       Height = 245
       Align = alLeft
+      ColCount = 9
+      DefaultColWidth = 20
+      DefaultRowHeight = 16
+      FixedRows = 0
       Font.Charset = DEFAULT_CHARSET
       Font.Color = clWindowText
       Font.Height = -13
       Font.Name = 'Courier New'
       Font.Style = []
-      Lines.Strings = (
-        '00 01 02 03 04 05 06 07 '
-        '08 09 0A 0B 0C 0D 0E 0F')
+      Options = [goFixedVertLine, goFixedHorzLine, goRangeSelect]
       ParentFont = False
-      TabOrder = 0
-    end
-    object memoText: TMemo
-      Left = 201
-      Top = 1
-      Width = 287
-      Height = 245
-      Align = alClient
-      Lines.Strings = (
-        'memoText')
+      ScrollBars = ssNone
       TabOrder = 1
+      OnDrawCell = dgHexDrawCell
     end
   end
 end

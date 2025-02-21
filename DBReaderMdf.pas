@@ -56,6 +56,13 @@ type
 
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
+    // contain no rows
+    function IsEmpty(): Boolean; override;
+    // predefined table
+    function IsSystem(): Boolean; override;
+    // not defined in metadata
+    function IsGhost(): Boolean; override;
+
     procedure AddFieldDef(AName: string; AType: Byte;
       ALength: Integer = 0;
       APrec: Byte = 0;
@@ -138,6 +145,11 @@ type
     procedure ReadTable(AName: string; ACount: Int64 = MaxInt; AList: TDbRowsList = nil); override;
     // get detailed multi-line description of table
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; override;
+
+    // get tables count
+    function GetTablesCount(): Integer; override;
+    // get table by index 0..GetTablesCount()-1
+    function GetTableByIndex(AIndex: Integer): TDbRowsList; override;
 
     property TableList: TMdfTableList read FTableList;
   end;
@@ -691,6 +703,16 @@ begin
     FFile.Read(FPageBuf, SizeOf(FPageBuf));
     Result := True;
   end;
+end;
+
+function TDBReaderMdf.GetTableByIndex(AIndex: Integer): TDbRowsList;
+begin
+  Result := TableList.GetItem(AIndex);
+end;
+
+function TDBReaderMdf.GetTablesCount: Integer;
+begin
+  Result := TableList.Count;
 end;
 
 procedure TDBReaderMdf.InitSystemTables;
@@ -1900,6 +1922,21 @@ procedure TMdfTable.BeforeDestruction;
 begin
   inherited;
 
+end;
+
+function TMdfTable.IsEmpty: Boolean;
+begin
+  Result := (RowCount = 0);
+end;
+
+function TMdfTable.IsGhost: Boolean;
+begin
+  Result := (Length(FieldsDef) = 0);
+end;
+
+function TMdfTable.IsSystem: Boolean;
+begin
+  Result := (ObjectID <= 100);
 end;
 
 { TMdfTableList }

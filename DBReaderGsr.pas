@@ -85,6 +85,10 @@ type
     procedure ReadTable(AName: string; ACount: Int64 = MaxInt; AList: TDbRowsList = nil); override;
     // get detailed multi-line description of table
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; override;
+    // get tables count
+    function GetTablesCount(): Integer; override;
+    // get table by index 0..GetTablesCount()-1
+    function GetTableByIndex(AIndex: Integer): TDbRowsList; override;
 
     property TableList: TGsrTableList read FTableList;
   end;
@@ -227,6 +231,16 @@ begin
     s := Format('%.2d Name=%s  Type=%s', [i, TmpTable.FieldsDef[i].Name, TmpTable.FieldsDef[i].TypeName]);
     ALines.Add(s);
   end;
+end;
+
+function TDBReaderGsr.GetTableByIndex(AIndex: Integer): TDbRowsList;
+begin
+  Result := TableList.GetItem(AIndex);
+end;
+
+function TDBReaderGsr.GetTablesCount: Integer;
+begin
+  Result := TableList.Count;
 end;
 
 function TDBReaderGsr.OpenFile(AFileName: string; AStream: TStream): Boolean;

@@ -11,9 +11,11 @@ Supported databases:
 * MS SQL Server (.MDF, .BAK)
 * MS Access/MS Jet 4 (.MDB, .ACCDB)
 * MS Outlook (.PST)
+* MS Exchange/MS ESE (.EDB)
 
 Sample projects:
 * Database browser - browse tables and inspect values
 
 Dependencies:
+* NovaLib (logger, RFUtils, MemStreams) - https://github.com/serbod/NovaLib
 * DelphiZLib 1.2.8 (optional)

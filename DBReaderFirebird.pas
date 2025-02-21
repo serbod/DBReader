@@ -65,6 +65,13 @@ type
 
     procedure AfterConstruction(); override;
     procedure BeforeDestruction(); override;
+    // contain no rows
+    function IsEmpty(): Boolean; override;
+    // predefined table
+    function IsSystem(): Boolean; override;
+    // not defined in metadata
+    function IsGhost(): Boolean; override;
+
     function FindRecByValue(AColIndex: Integer; AValue: Variant): TDbRowItem;
     procedure AddFieldDef(AName: string; AType: Integer;
       ALength: Integer = 0;
@@ -192,6 +199,11 @@ type
 
     // get detailed multi-line description of table
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; override;
+
+    // get tables count
+    function GetTablesCount(): Integer; override;
+    // get table by index 0..GetTablesCount()-1
+    function GetTableByIndex(AIndex: Integer): TDbRowsList; override;
 
     property TableList: TRDBTableList read FTableList;
     property OdsVersion: Integer read FOdsVersion;
@@ -992,6 +1004,16 @@ begin
      Length(Result), BufferToHex(Result[1], 4), s
     ]));    }
   
+end;
+
+function TDBReaderFB.GetTableByIndex(AIndex: Integer): TDbRowsList;
+begin
+  Result := TableList.GetItem(AIndex);
+end;
+
+function TDBReaderFB.GetTablesCount: Integer;
+begin
+  Result := TableList.Count;
 end;
 
 {function TDBReaderFB.GetRelationName(ARelID: Integer): string;
@@ -2445,6 +2467,21 @@ begin
       Exit;
   end;
   Result := nil;
+end;
+
+function TRDBTable.IsEmpty: Boolean;
+begin
+  Result := (RowCount = 0);
+end;
+
+function TRDBTable.IsGhost: Boolean;
+begin
+  Result := (Length(FieldsDef) = 0);
+end;
+
+function TRDBTable.IsSystem: Boolean;
+begin
+  Result := (RelationID <= 50);
 end;
 
 { TRDBTableList }

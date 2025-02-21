@@ -50,9 +50,15 @@ type
     PageIdCount: Integer;
     FieldInfoArr: TMdbFieldDefRecArr;
     TableType: AnsiChar; // N ок S
+    // contain no rows
+    function IsEmpty(): Boolean; override;
+    // predefined table
+    function IsSystem(): Boolean; override;
+    // not defined in metadata
+    function IsGhost(): Boolean; override;
   end;
 
-  TMdfTableInfoList = class(TList)
+  TMdbTableInfoList = class(TList)
   protected
     procedure Notify(Ptr: Pointer; Action: TListNotification); override;
   public
@@ -64,7 +70,7 @@ type
 
   TDBReaderMdb = class(TDBReader)
   private
-    FTableList: TMdfTableInfoList;
+    FTableList: TMdbTableInfoList;
     FFileInfo: TMdbFileInfo;
     FPageSize: Integer;
     FIsMetadataLoaded: Boolean;
@@ -101,7 +107,12 @@ type
     // get detailed multi-line description of table
     function FillTableInfoText(ATableName: string; ALines: TStrings): Boolean; override;
 
-    property TableList: TMdfTableInfoList read FTableList;
+    // get tables count
+    function GetTablesCount(): Integer; override;
+    // get table by index 0..GetTablesCount()-1
+    function GetTableByIndex(AIndex: Integer): TDbRowsList; override;
+
+    property TableList: TMdbTableInfoList read FTableList;
     property FileInfo: TMdbFileInfo read FFileInfo;
   end;
 
@@ -244,7 +255,7 @@ end;
 procedure TDBReaderMdb.AfterConstruction;
 begin
   inherited;
-  FTableList := TMdfTableInfoList.Create();
+  FTableList := TMdbTableInfoList.Create();
 end;
 
 procedure TDBReaderMdb.BeforeDestruction;
@@ -332,6 +343,7 @@ begin
   for i := 0 to SysObjTable.Count - 1 do
   begin
     TmpRow := SysObjTable.GetItem(i);
+    TmpTable := nil;
     if VarIsOrdinal(TmpRow.Values[0]) then
       TmpTable := TableList.GetByID(TmpRow.Values[0]);
     if Assigned(TmpTable) then
@@ -344,8 +356,8 @@ var
   rdr: TRawDataReader;
   iPageType, iPageID, iRecCount, iPrevRecOffs: Integer;
   i, iRecOffs, iRecSize: Integer;
-  RecPtr: TMdbRecPointer;
-  sData: AnsiString;
+  //RecPtr: TMdbRecPointer;
+  //sData: AnsiString;
 begin
   Result := False;
   if FBlobRawPageID <> APageID then
@@ -367,14 +379,14 @@ begin
   //
   rdr.Init(FBlobRawPage[0]);
   iPageType := rdr.ReadUInt16; // Page type
+  rdr.ReadUInt16; // Free space in this page
+  iPageID := rdr.ReadInt32; // Page pointer to table definition
   if Byte(iPageType) <> MDB_PAGE_TYPE_DATA then
   begin
     Assert(False, 'Page not DATA: ' + IntToStr(iPageID));
     AData := 'Page not DATA: ' + IntToStr(iPageID);
     Exit;
   end;
-  rdr.ReadUInt16; // Free space in this page
-  iPageID := rdr.ReadInt32; // Page pointer to table definition
   Assert(iPageID = MDB_TABLE_LVAL, 'Page not LVAL: ' + IntToStr(iPageID));
   //if nPageID <> MDB_TABLE_LVAL then
   //  Exit;
@@ -459,13 +471,23 @@ begin
     Result := Result + WideDataToStr(Copy(AStr, nStart, MaxInt));
 end;
 
+function TDBReaderMdb.GetTableByIndex(AIndex: Integer): TDbRowsList;
+begin
+  Result := TableList.GetItem(AIndex);
+end;
+
+function TDBReaderMdb.GetTablesCount: Integer;
+begin
+  Result := TableList.Count;
+end;
+
 function TDBReaderMdb.OpenFile(AFileName: string; AStream: TStream): Boolean;
 var
   PageBuf: TByteDynArray;
   rdr: TRawDataReader;
   iPageType: Word;
   iPagePos: Int64;
-  iPageID, iCurPageID: Cardinal;
+  iCurPageID: Cardinal;
   TableInfo: TMdbTableInfo;
   s: string;
 begin
@@ -538,7 +560,7 @@ begin
       // table definition page
       rdr.ReadUInt8; // unknown
       rdr.ReadUInt16; // Free space in this page minus 8
-      iPageID := rdr.ReadUInt32; // Next tdef page pointer (0 if none)
+      rdr.ReadUInt32; // Next tdef page pointer (0 if none)
 
       TableInfo := TableList.GetByID(iCurPageID);
       if not Assigned(TableInfo) then
@@ -656,7 +678,7 @@ var
   VarLenArr: array of TMdbVarLenRec;
   TmpGuid: TGUID;
   sData, sData2: AnsiString;
-  RecPtr: TMdbRecPointer;
+  //RecPtr: TMdbRecPointer;
   IsNull: Boolean;
 begin
   Result := False;
@@ -750,7 +772,7 @@ begin
     rdr.SetPosition(0);
     TmpRow.RawData := rdr.ReadBytes(ARowSize);
   end;
-  nVarLenIndex := 0;
+  //nVarLenIndex := 0;
   if FFileInfo.JetVersion = 0 then  // Jet3
     nBaseOffs := 1
   else
@@ -1138,7 +1160,7 @@ end;
 
 { TMdfTableInfoList }
 
-function TMdfTableInfoList.GetByID(ATableID: Integer): TMdbTableInfo;
+function TMdbTableInfoList.GetByID(ATableID: Integer): TMdbTableInfo;
 var
   i: Integer;
 begin
@@ -1151,7 +1173,7 @@ begin
   Result := nil;
 end;
 
-function TMdfTableInfoList.GetByName(AName: string): TMdbTableInfo;
+function TMdbTableInfoList.GetByName(AName: string): TMdbTableInfo;
 var
   i: Integer;
 begin
@@ -1164,21 +1186,38 @@ begin
   Result := nil;
 end;
 
-function TMdfTableInfoList.GetItem(AIndex: Integer): TMdbTableInfo;
+function TMdbTableInfoList.GetItem(AIndex: Integer): TMdbTableInfo;
 begin
   Result := TMdbTableInfo(Get(AIndex));
 end;
 
-procedure TMdfTableInfoList.Notify(Ptr: Pointer; Action: TListNotification);
+procedure TMdbTableInfoList.Notify(Ptr: Pointer; Action: TListNotification);
 begin
   inherited;
   if Action = lnDeleted then
     TMdbTableInfo(Ptr).Free;
 end;
 
-procedure TMdfTableInfoList.SortByName;
+procedure TMdbTableInfoList.SortByName;
 begin
 
+end;
+
+{ TMdbTableInfo }
+
+function TMdbTableInfo.IsEmpty: Boolean;
+begin
+  Result := (RowCount = 0);
+end;
+
+function TMdbTableInfo.IsGhost: Boolean;
+begin
+  Result := (Length(FieldsDef) = 0);
+end;
+
+function TMdbTableInfo.IsSystem: Boolean;
+begin
+  Result := (TableType = 'S');
 end;
 
 end.
