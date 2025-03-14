@@ -100,10 +100,6 @@ object FormMain: TFormMain
     object tsTableInfo: TTabSheet
       Caption = 'Table Info'
       ImageIndex = 2
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoInfo: TMemo
         AlignWithMargins = True
         Left = 4
@@ -128,10 +124,6 @@ object FormMain: TFormMain
     end
     object tsLog: TTabSheet
       Caption = 'Log'
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoLog: TMemo
         AlignWithMargins = True
         Left = 4
@@ -188,11 +180,12 @@ object FormMain: TFormMain
   object OpenDialog: TOpenDialog
     Filter = 
       'Database files|*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak;*.' +
-      'mdb;*.accdb;*.pst|Interbase/Firebird files (*.gdb, *.fdb)|*.gdb;' +
-      '*.fdb|Midas/DataSnap files (*.cds)|*.cds|Paradox files (*.db)|*.' +
-      'db|Mapsoft GSR files (*.gsr)|*.gsr|dBase/FoxPro (*.dbf)|*.dbf|MS' +
-      ' SQL (*.mdf, *.bak)|*.mdf;*.bak|MS Access/Jet (*.mdb, *.accdb)|*' +
-      '.mdb;*.accdb|MS Outlook (*.pst)|*.pst|All files (*.*)|*.*'
+      'mdb;*.accdb;*.pst;*.edb;*.ibd|Interbase/Firebird files (*.gdb, *' +
+      '.fdb)|*.gdb;*.fdb|Midas/DataSnap files (*.cds)|*.cds|Paradox fil' +
+      'es (*.db)|*.db|Mapsoft GSR files (*.gsr)|*.gsr|dBase/FoxPro (*.d' +
+      'bf)|*.dbf|MS SQL (*.mdf, *.bak)|*.mdf;*.bak|MS Access/Jet (*.mdb' +
+      ', *.accdb)|*.mdb;*.accdb|MS Outlook (*.pst)|*.pst|MS Exchange (*' +
+      '.edb)|*.edb|MySQL InnoDB (*.ibd)|*.ibd|All files (*.*)|*.*'
     Left = 124
   end
 end

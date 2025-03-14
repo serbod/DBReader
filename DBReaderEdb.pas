@@ -6,6 +6,8 @@ Extensible Storage Engine (ESE) Database File (EDB) reader
 Author: Sergey Bodrov, 2025 Minsk
 License: MIT
 
+todo: read columns SLV, GUID, compression
+
 https://github.com/libyal/libesedb/blob/main/documentation/Extensible%20Storage%20Engine%20(ESE)%20Database%20File%20(EDB)%20format.asciidoc
 *)
 
@@ -52,11 +54,11 @@ type
     // fixed size columns
     ObjIdTable: Cardinal;      // Long   Object or table identifier
     CatType: Word;             // Short  Catalog type
-    ColID: Cardinal;           // Long   Identifier
-    ColTypOrPgNoFdp: Cardinal; // Long   Column type COL_TYPE_ or FDP page number
-    SpaceUsage: Cardinal;      // Long   How many bytes for fixed columns
+    ColID: Integer;            // Long   Identifier
+    ColTypOrPgNoFdp: Integer;  // Long   Column type COL_TYPE_ or FDP page number
+    SpaceUsage: Integer;       // Long   How many bytes for fixed columns
     Flags: Cardinal;           // Long   Column flags COL_FLAG_
-    //PagesOrLocale: Cardinal;   // Long   Number of pages or codepage
+    PagesOrLocale: Integer;    // Long   Number of pages or codepage
     //RootFlag: Boolean;         // Bit
     //RecordOffset: Word;        // Short
     //LCMapFlag: Cardinal;       // Long   Flags for the LCMapString function
@@ -100,7 +102,9 @@ type
 
     procedure AddFieldDef(AName: string; AType: Word;
       ALength: Integer = 0;
-      AColID: Integer = -1);
+      AColID: Integer = -1;
+      AColFlags: Integer = 0;
+      ALocale: Integer = 0);
   end;
 
   TEdbTableInfoList = class(TList)
@@ -181,6 +185,7 @@ type
     ValueOffset: Word;
     Flags: Byte;
     ValueSize: Word;
+    KeySize: Word;
   end;
 
   TEdbVarLenRec = record
@@ -307,7 +312,7 @@ begin
   NullFlagIndex := (AIndex div 8);
   NullFlagOffs := AIndex mod 8;
   if NullFlagIndex < Length(ANullBmp) then
-    Result := (ANullBmp[NullFlagIndex] and (Byte(1) shl NullFlagOffs)) = 1
+    Result := (ANullBmp[NullFlagIndex] and (Byte(1) shl NullFlagOffs)) <> 0
   else
     Result := False;
 end;
@@ -353,13 +358,14 @@ begin
   ALines.Add(Format('== FieldInfo  Count=%d', [Length(TmpTable.FieldInfoArr)]));
   for i := Low(TmpTable.FieldInfoArr) to High(TmpTable.FieldInfoArr) do
   begin
-    s := Format('%.2d Name=%s  Type=%s  Length=%d  ID=%d  Flags=$%x',
+    s := Format('%.2d Name=%s  Type=%s  Length=%d  ID=%d  Flags=$%x  Locale=%d',
       [i,
         TmpTable.FieldInfoArr[i].Name,
         EdbColTypeToStr(TmpTable.FieldInfoArr[i].ColTypOrPgNoFdp),
         TmpTable.FieldInfoArr[i].SpaceUsage,
         TmpTable.FieldInfoArr[i].ColID,
-        TmpTable.FieldInfoArr[i].Flags
+        TmpTable.FieldInfoArr[i].Flags,
+        TmpTable.FieldInfoArr[i].PagesOrLocale
       ]);
     ALines.Add(s);
   end;
@@ -367,10 +373,10 @@ end;
 
 procedure TDBReaderEdb.FillTablesList;
 var
-  i, ii, id, iOffs: Integer;
+  i, ii, iOffs: Integer;
   TmpTable, SysObjTable: TEdbTableInfo;
   TmpRow: TDbRowItem;
-  ObjID, CatType, ColID, ColType, ColSize: Integer;
+  ObjID, CatType, ColID, ColType, ColSize, ColFlags, ColLocale: Integer;
   sName: string;
 begin
   SysObjTable := TableList.GetByID(SYS_OBJ_TABLE_ID);
@@ -380,12 +386,14 @@ begin
   for i := 0 to SysObjTable.Count-1 do
   begin
     TmpRow := SysObjTable.GetItem(i);
-    ObjID   := TmpRow.Values[0]; // ObjidTable
-    CatType := TmpRow.Values[1]; // Type
-    ColID   := TmpRow.Values[2]; // Id
-    ColType := TmpRow.Values[3]; // ColtypOrPgnoFDP
-    ColSize := TmpRow.Values[4]; // SpaceUsage
-    sName   := TmpRow.Values[7]; // Name
+    ObjID    := TmpRow.Values[0]; // ObjidTable
+    CatType  := TmpRow.Values[1]; // Type
+    ColID    := TmpRow.Values[2]; // Id
+    ColType  := TmpRow.Values[3]; // ColtypOrPgnoFDP
+    ColSize  := TmpRow.Values[4]; // SpaceUsage
+    ColFlags := TmpRow.Values[5]; // Flags
+    ColLocale := TmpRow.Values[6]; // PagesOrLocale
+    sName    := TmpRow.Values[7]; // Name
 
     TmpTable := TableList.GetByID(ObjID);
     if not Assigned(TmpTable) then
@@ -400,7 +408,7 @@ begin
         TmpTable.TableName := sName;
       CAT_TYPE_COLUMN:
       begin
-        TmpTable.AddFieldDef(sName, ColType, ColSize, ColID);
+        TmpTable.AddFieldDef(sName, ColType, ColSize, ColID, ColFlags, ColLocale);
       end;
       CAT_TYPE_INDEX:
       begin
@@ -506,7 +514,7 @@ var
   PageBuf: TByteDynArray;
   rdr: TRawDataReader;
   iPagePos: Int64;
-  iPageID, iCurPageID: Cardinal;
+  iCurPageID: Cardinal;
   PageHead: TEdbPageHeadRec;
   TableInfo: TEdbTableInfo;
   s: string;
@@ -667,11 +675,10 @@ function TDBReaderEdb.ReadDataPage(const APageBuf: TByteDynArray; APagePos: Int6
   ATableInfo: TEdbTableInfo; AList: TDbRowsList): Boolean;
 var
   rdr: TRawDataReader;
-  iPageID, iCurPageID, nTag, nFatherID: Cardinal;
+  iCurPageID, nTag, nFatherID: Cardinal;
   PageHead: TEdbPageHeadRec;
-  TableInfo: TEdbTableInfo;
   PageTag: TEdbPageTagRec;
-  i, iRecCount, iRecOffs, iPrevRecOffs, iRecSize, iLeafHeadSize: Integer;
+  i, iRecOffs, iLeafHeadSize: Integer;
   w: Word;
 begin
   Result := False;
@@ -703,8 +710,8 @@ begin
     // read tag value
     if PageTag.ValueSize > 0 then
     begin
-      if (PageHead.ObjID = 2) and (i = 2) then
-        BufToFile(APageBuf[FPageHeadSize + PageTag.ValueOffset], PageTag.ValueSize, 'Tag_' + IntToStr(i) + '.data');
+      //if (PageHead.ObjID = 2) and (i = 2) then
+      //  BufToFile(APageBuf[FPageHeadSize + PageTag.ValueOffset], PageTag.ValueSize, 'Tag_' + IntToStr(i) + '.data');
       if IsDebugRows then
         LogInfo(Format('- Tag_%x offs=%x len=%x  data=%s',
           [i, PageTag.ValueOffset, PageTag.ValueSize, DataAsStr(APageBuf[FPageHeadSize + PageTag.ValueOffset], PageTag.ValueSize)]));
@@ -730,6 +737,16 @@ begin
 
       end
       else
+      if (i = 1) and ((PageHead.PageFlags and PAGE_FLAG_LEAF) <> 0) then
+      begin
+        // first NON-ROOT LEAF page tag is LEAF page header
+        if PageTag.ValueSize > 0 then
+        begin
+          // common page key
+        end;
+
+      end
+      else
       if ((PageHead.PageFlags and PAGE_FLAG_LEAF) <> 0) then
       begin
         // LEAF page entry
@@ -744,19 +761,23 @@ begin
 
         // 13  2   == data/type ID (01..7F fixed, 80..FF variable, 100..FFFF tagged)
 
-        {w := rdr.ReadUInt16;
+        w := rdr.ReadUInt16;
         if FFileInfo.FileFmtRev >= $11 then
         begin
-          // <3bit flags> <13bit common key size>
+          // <3bit flags> <13bit key size>
           PageTag.Flags := ((w shr 13) and $7);
-          w := w and $1FFF;
         end;
-        rdr.ReadUInt16; // local page key size  }
+        PageTag.KeySize := w and $1FFF;
 
-        iLeafHeadSize := rdr.ReadUInt8 + 2;  // 15
+        if ((PageTag.Flags and 4) <> 0) then
+          PageTag.KeySize := rdr.ReadUInt16 + 4  //  <CommonKeySize><KeySize><Key>
+        else
+          PageTag.KeySize := PageTag.KeySize + 2;  // <KeySize><Key>
+        iLeafHeadSize := PageTag.KeySize;
+        //iLeafHeadSize := 15;
         if IsDebugRows then
           LogInfo(Format('- Tag_%x flags=%x  head=%s',
-            [i, PageTag.Flags, BufferToHex(APageBuf[FPageHeadSize + PageTag.ValueOffset], iLeafHeadSize)]));
+            [i, PageTag.Flags, BufferToHex(APageBuf[FPageHeadSize + PageTag.ValueOffset], iLeafHeadSize + 10)]));
 
         if not Assigned(ATableInfo) then
           ATableInfo := TableList.GetByID(PageHead.ObjID);
@@ -780,7 +801,7 @@ function TDBReaderEdb.ReadDataRecord(const APageBuf: TByteDynArray; ARecOffs, AR
   ATableInfo: TEdbTableInfo; AList: TDbRowsList): Boolean;
 var
   rdr: TRawDataReader;
-  i, ii, iOffs, iVarOffs, iVarCol, iVarStart, iFixPos, iBitmapLen, iTotalSize: Integer;
+  i, ii, iOffs, iPrevOffs, iVarOffs, iVarCol, iVarStart, iFixPos, iBitmapLen, iTotalSize: Integer;
   LastFixColID, LastVarColID: Integer;
   ColType, ColSize, ColID: Word;
   NullBmp: TByteDynArray;
@@ -789,6 +810,7 @@ var
   VarLenArr: array of TEdbVarLenRec;
   TagLenArr: array of TEdbVarLenRec;
   NeedSkip: Boolean;
+  sData: AnsiString;
 begin
   // [0]   4   == Data definition header
   //       1   Last Fix ColID
@@ -796,10 +818,10 @@ begin
   //       2   Fixed size data offset [v]
   // [4]   x   == Fixed size columns
   //           == Null bitmap, size depend on fixed col count
-  // [v]       == VarData sizes array, 2 bytes per item
+  // [v]       == VarData offset array, 2 bytes per item. Same as cumulative size (4,4,8 is sizes 4,0,4)
   //           -- VarData data array
   //           == Tagged data
-
+  Result := False;
   if not Assigned(ATableInfo) then Exit;
   if not Assigned(AList) then
     AList := ATableInfo;
@@ -811,7 +833,8 @@ begin
   iVarOffs := rdr.ReadUInt16;
   SetLength(VarLenArr, ATableInfo.VarColCount);
   SetLength(TagLenArr, ATableInfo.TaggedCount);
-  //SetLength(TagLenArr, LastVarColID - $7F);
+  if LastVarColID >= $80 then
+    SetLength(VarLenArr, LastVarColID - $7F);
 
   // Null bitmap
   iBitmapLen := ((LastFixColID + 7) div 8); // bytes count
@@ -822,26 +845,31 @@ begin
     rdr.ReadToBuffer(NullBmp[0], iBitmapLen);
   end;
 
+  // == read VarLen data
   rdr.SetPosition(iVarOffs);
-  // read VarLen data
   if ATableInfo.VarColCount > 0 then
   begin
     iVarStart := rdr.GetPosition;
     iTotalSize := 0;
+    iPrevOffs := 0;
     // sizes
     for i := 0 to Length(VarLenArr) - 1 do
     begin
+      iOffs := rdr.ReadUInt16;
       Inc(iVarStart, 2);
-      VarLenArr[i].Size := rdr.ReadUInt16;
-      if (VarLenArr[i].Size and ($8000) <> 0) then
+      if (iOffs and ($8000) <> 0) then
       begin
         VarLenArr[i].Size := -1;  // Null
+      end
+      else
+      begin
+        VarLenArr[i].Size := iOffs - iPrevOffs;
+        Inc(iTotalSize, VarLenArr[i].Size);
+        iPrevOffs := iOffs;
       end;
 
-      Inc(iTotalSize, VarLenArr[i].Size);
-
       // do not go outside record
-      if iTotalSize >= ARecSize then
+      if iVarStart + iTotalSize > ARecSize then
       begin
         VarLenArr[i].Size := -1;
         if iTotalSize > ARecSize then
@@ -857,13 +885,18 @@ begin
       begin
         //Assert(rdr.GetPosition + VarLenArr[i].Size <= ARecSize,
         //  Format('!RecSize=%d  VarPos=%d  VarSize=%d', [ARecSize, rdr.GetPosition, VarLenArr[i].Size]));
+        VarLenArr[i].Offs := rdr.GetPosition;
         VarLenArr[i].Data := rdr.ReadBytes(VarLenArr[i].Size);
       end
       else
+      begin
+        VarLenArr[i].Size := 0;
         VarLenArr[i].Data := '';
+      end;
     end;
   end;
-  // read Tagged data
+
+  // == read Tagged data
   if (ATableInfo.TaggedCount > 0) and (FileInfo.FileFmtRev >= $09) then
   begin
     iVarStart := rdr.GetPosition;
@@ -877,16 +910,15 @@ begin
       TagLenArr[i].ColID := rdr.ReadUInt16;
       if (TagLenArr[i].ColID < $100) then
       begin
-        // todo: detect VarLen values block end position (or last VarLen item size)
         LogInfo('Wrong tagged value ColID!');
         TagLenArr[i].Size := -1;
         Break;
       end;
       iOffs := rdr.ReadUInt16;
-      TagLenArr[i].Offs := iVarStart + (iOffs and $3FFF);  // strip flags
-      TagLenArr[i].Size := ARecSize - TagLenArr[i].Offs - 1;
+      TagLenArr[i].Offs := iVarStart + (iOffs and $3FFF) + 1;  // strip flags
+      TagLenArr[i].Size := ARecSize - TagLenArr[i].Offs;
       if i > 0 then
-        TagLenArr[i-1].Size := TagLenArr[i].Offs - TagLenArr[i-1].Offs - 1;
+        TagLenArr[i-1].Size := TagLenArr[i].Offs - TagLenArr[i-1].Offs;
 
       // do not go outside record
       if TagLenArr[i].Offs + TagLenArr[i].Size > ARecSize  then
@@ -918,6 +950,9 @@ begin
   begin
     rdr.SetPosition(0);
     TmpRow.RawData := rdr.ReadBytes(ARecSize);
+    //if Pos('tbUpdates', TmpRow.RawData) > 0 then
+    //  BufToFile(TmpRow.RawData[1], ARecSize, 'tbUpdates.data');
+
   end;
 
   // fields
@@ -961,7 +996,15 @@ begin
       case ColType of
         COL_TYPE_BINARY,
         COL_TYPE_TEXT:
-          NeedSkip := False;
+        begin
+          if (VarLenArr[iVarCol].Size > 0) then
+          begin
+            rdr.SetPosition(VarLenArr[iVarCol].Offs);
+            ColSize := VarLenArr[iVarCol].Size;
+            NeedSkip := False;
+          end;
+          Inc(iVarCol);
+        end
       else
         Assert(False, 'VarLen wrong type=' + IntToStr(ColType));
       end;
@@ -988,25 +1031,24 @@ begin
       COL_TYPE_LONG_LONG: v := rdr.ReadInt64;
       COL_TYPE_USHORT:    v := rdr.ReadUInt16;
 
-      //COL_TYPE_GUID:      v :=
+      COL_TYPE_GUID:      v := '<GUID>';
 
       // variable size fields
       COL_TYPE_BINARY,
       COL_TYPE_TEXT:
       begin
-        if ColSize = 255 then
-        begin
-          if VarLenArr[iVarCol].Size > 0 then
-            v := VarLenArr[iVarCol].Data;
-          Inc(iVarCol);
-        end
-        else
-          v := '<BLOB>';
+        sData := rdr.ReadBytes(ColSize);
+        if ATableInfo.FieldInfoArr[i].PagesOrLocale = 1200 then  // UTF-16
+          sData := WideDataToStr(sData);
+        v := sData;
       end;
       COL_TYPE_LONG_BINARY,
       COL_TYPE_LONG_TEXT:
       begin
-        v := rdr.ReadBytes(ColSize);
+        sData := rdr.ReadBytes(ColSize);
+        if ATableInfo.FieldInfoArr[i].PagesOrLocale = 1200 then  // UTF-16
+          sData := WideDataToStr(sData);
+        v := sData;
       end;
       COL_TYPE_SLV:
       begin
@@ -1067,7 +1109,7 @@ var
   i: Integer;
   PageBuf: TByteDynArray;
   iPagePos: Int64;
-  TmpRow: TDbRowItem;
+  //TmpRow: TDbRowItem;
 begin
   TmpTable := TableList.GetByName(AName);
   if not Assigned(TmpTable) then
@@ -1157,7 +1199,7 @@ end;
 
 { TEdbTableInfo }
 
-procedure TEdbTableInfo.AddFieldDef(AName: string; AType: Word; ALength, AColID: Integer);
+procedure TEdbTableInfo.AddFieldDef(AName: string; AType: Word; ALength, AColID, AColFlags, ALocale: Integer);
 var
   i, n: Integer;
 begin
@@ -1209,8 +1251,10 @@ begin
   end;
 
   FieldInfoArr[n].ColTypOrPgNoFdp := AType;
-  FieldInfoArr[n].ColID := AColID;
-  FieldInfoArr[n].SpaceUsage := ALength;
+  FieldInfoArr[n].ColID := Cardinal(AColID);
+  FieldInfoArr[n].SpaceUsage := Cardinal(ALength);
+  FieldInfoArr[n].Flags := Cardinal(AColFlags);
+  FieldInfoArr[n].PagesOrLocale := ALocale;
   FieldInfoArr[n].Name := AName;
 
   FieldsDef[n].Name := AName;

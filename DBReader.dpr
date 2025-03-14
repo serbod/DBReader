@@ -15,7 +15,8 @@ uses
   DBReaderMdb in 'DBReaderMdb.pas',
   FSReaderPst in 'FSReaderPst.pas',
   FSReaderBase in 'FSReaderBase.pas',
-  DBReaderEdb in 'DBReaderEdb.pas';
+  DBReaderEdb in 'DBReaderEdb.pas',
+  DBReaderInno in 'DBReaderInno.pas';
 
 {$R *.res}
 

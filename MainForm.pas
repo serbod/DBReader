@@ -13,7 +13,7 @@ uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,  Menus,
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
-  DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb,
+  DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -81,6 +81,8 @@ type
     procedure FillTree();
     procedure FillTreeByFiles(AFileName: string);
     procedure ShowTable(ATableName: string);
+    procedure ShowCellValue();
+
     procedure OpenFB(AFileName: string);
     procedure OpenBDB(AFileName: string);  // BerkleyDB (not tested)
     procedure OpenCDS(AFileName: string);
@@ -92,6 +94,7 @@ type
     procedure OpenMdb(AFileName: string);
     procedure OpenEdb(AFileName: string);
     procedure OpenPst(AFileName: string);
+    procedure OpenInnoDB(AFileName: string);
 
     procedure OnLogHandler(const S: string);
     procedure OnPageReadedHandler(Sender: TObject);
@@ -170,47 +173,8 @@ begin
 end;
 
 procedure TFormMain.dgItemsDblClick(Sender: TObject);
-var
-  TmpField: TDbFieldDefRec;
-  TmpRow: TDbRowItem;
-  i, iOffs: Integer;
 begin
-  if (FCurRowIndex <= FRowsList.Count) and (FCurColIndex < Length(FRowsList.FieldsDef)) then
-  begin
-    TmpField := FRowsList.FieldsDef[FCurColIndex];
-    TmpRow := FRowsList.GetItem(FCurRowIndex);
-    if Assigned(TmpRow) then
-    begin
-      FormRawValue.Value := Null;
-      if FCurColIndex < Length(TmpRow.Values) then
-      begin
-        //s := VarToStrDef(TmpRow.Values[ACol], 'null');
-        //s := TmpRow.GetFieldAsStr(FCurRowIndex);
-        FormRawValue.Value := TmpRow.Values[FCurColIndex];
-      end;
-      FormRawValue.FieldName := TmpField.Name;
-      if TmpField.FieldType <> ftUnknown then
-      begin
-        FormRawValue.FieldTypeName := TmpField.TypeName;
-        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob, ftBytes, ftVarBytes];
-        FormRawValue.ShowValue(TmpRow.RawData, TmpField.RawOffset, TmpField.Size);
-      end
-      else
-      begin
-        iOffs := TmpField.RawOffset;
-        if iOffs = 0 then
-        begin
-          // calculate offset
-          iOffs := ((Length(FRowsList.FieldsDef) div 32) + 1) * 4;
-          for i := 0 to FCurColIndex-1 do
-            iOffs := iOffs + FRowsList.FieldsDef[i].Size;
-        end;
-        FormRawValue.FieldTypeName := TmpField.TypeName;
-        FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob, ftBytes, ftVarBytes];
-        FormRawValue.ShowValue(TmpRow.RawData, iOffs, TmpField.Size);
-      end;
-    end;
-  end;
+  ShowCellValue();
 end;
 
 procedure TFormMain.dgItemsDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
@@ -654,7 +618,11 @@ begin
       OpenEdb(FDbFileName)
     else
     if (sExt = '.pst') then
-      OpenPst(FDbFileName);
+      OpenPst(FDbFileName)
+    else
+    if (sExt = '.ibd') or (Pos('ibdata1', ExtractFileName(FDbFileName)) > 0) then
+      OpenInnoDB(FDbFileName);
+
   finally
     memoLog.Lines.EndUpdate();
   end;
@@ -679,10 +647,6 @@ begin
 end;
 
 procedure TFormMain.OpenEdb(AFileName: string);
-var
-  i: Integer;
-  TmpTable: TEdbTableInfo;
-  tnParent: TTreeNode;
 begin
   FDBReader := TDBReaderEdb.Create(Self);
   InitReader(FDBReader);
@@ -697,11 +661,6 @@ begin
 end;
 
 procedure TFormMain.OpenFB(AFileName: string);
-var
-  tnParent: TMyTreeNode;
-  i: Integer;
-  //TmpRel: TRDB_RelationsItem;
-  TmpTable: TRDBTable;
 begin
   FDBReader := TDBReaderFB.Create(Self);
   InitReader(FDBReader);
@@ -756,6 +715,21 @@ begin
   end;
   tvMain.Items.EndUpdate();
 {$endif}
+end;
+
+procedure TFormMain.OpenInnoDB(AFileName: string);
+begin
+  FDBReader := TDBReaderInnoDB.Create(Self);
+  InitReader(FDBReader);
+  try
+    FDBReader.OpenFile(AFileName);
+  except
+    on E: Exception do
+      memoInfo.Lines.Append(E.Message);
+  end;
+
+  // Fill tree
+  FillTree();
 end;
 
 procedure TFormMain.OpenMdb(AFileName: string);
@@ -858,6 +832,54 @@ begin
     end;
   finally
     r.Free();
+  end;
+end;
+
+procedure TFormMain.ShowCellValue;
+var
+  TmpField: TDbFieldDefRec;
+  TmpRow: TDbRowItem;
+  i, iOffs, iLen: Integer;
+begin
+  if (FCurRowIndex <= FRowsList.Count) and (FCurColIndex < Length(FRowsList.FieldsDef)) then
+  begin
+    TmpField := FRowsList.FieldsDef[FCurColIndex];
+    TmpRow := FRowsList.GetItem(FCurRowIndex);
+    if Assigned(TmpRow) then
+    begin
+      FormRawValue.Value := Null;
+      if FCurColIndex < Length(TmpRow.Values) then
+      begin
+        //s := VarToStrDef(TmpRow.Values[ACol], 'null');
+        //s := TmpRow.GetFieldAsStr(FCurRowIndex);
+        FormRawValue.Value := TmpRow.Values[FCurColIndex];
+      end;
+      // field offset and size
+      iOffs := TmpField.RawOffset;
+      iLen := TmpField.Size;
+      if iOffs = 0 then
+      begin
+        if Length(TmpRow.RawOffs) = 0 then
+        begin
+          // calculate offset
+          //iOffs := ((Length(FRowsList.FieldsDef) div 32) + 1) * 4;  // null bitmap
+          for i := 0 to FCurColIndex-1 do
+            iOffs := iOffs + FRowsList.FieldsDef[i].Size;
+        end
+        else if FCurColIndex < Length(TmpRow.RawOffs) then
+        begin
+          iOffs := TmpRow.RawOffs[FCurColIndex];
+          if FCurColIndex = (Length(TmpRow.RawOffs)-1) then
+            iLen := Length(TmpRow.RawData) - iOffs
+          else
+            iLen := TmpRow.RawOffs[FCurColIndex+1] - iOffs;
+        end;
+      end;
+      FormRawValue.FieldName := TmpField.Name;
+      FormRawValue.FieldTypeName := TmpField.TypeName;
+      FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob, ftBytes, ftVarBytes];
+      FormRawValue.ShowValue(TmpRow.RawData, iOffs, iLen);
+    end;
   end;
 end;
 

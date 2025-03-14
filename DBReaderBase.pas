@@ -29,10 +29,12 @@ type
   protected
     FOwner: TDbRowsList;
   public
-    RawData: AnsiString;
     Values: array of Variant;
+    RawData: AnsiString;
+    RawOffs: array of Integer;
     constructor Create(AOwner: TDbRowsList);
     function GetFieldAsStr(AFieldIndex: Integer): string; virtual;
+    procedure Assign(ASourceItem: TDbRowItem); virtual;
     property Owner: TDbRowsList read FOwner;
   end;
 
@@ -138,6 +140,7 @@ type
     nPos: Integer;
     StartPtr: PByte;
     DataPtr: PByte;
+    IsBigEndian: Boolean; // Most significant byte first, 00 01 = 1
 
     procedure InitBuf(AData: AnsiString; AStartPos: Integer = 0); overload;
     procedure Init(const AData); overload;
@@ -180,7 +183,8 @@ function VarToInt(const AValue: Variant): Integer;
 function DataAsStr(const AData; ALen: Integer): string;
 // 2-byte data to string
 function WideDataToStr(AData: AnsiString): string;
-
+// reverse bytes order
+procedure ReverseBytes(const AData; ASize: Integer);
 
 implementation
 
@@ -291,6 +295,24 @@ begin
     Result := '';
 end;
 
+procedure ReverseBytes(const AData; ASize: Integer);
+var
+  i, bt: Byte;
+  bp1, bp2: PByte;
+begin
+  bp1 := @AData;
+  bp2 := @AData;
+  Inc(bp2, ASize-1);
+  for i := 0 to (ASize div 2)-1 do
+  begin
+    bt := bp1^;
+    bp1^ := bp2^;
+    bp2^ := bt;
+    Inc(bp1);
+    Dec(bp2);
+  end;
+end;
+
 { TDbRowsList }
 
 function TDbRowsList.GetItem(AIndex: Integer): TDbRowItem;
@@ -330,6 +352,13 @@ begin
 end; }
 
 { TDbRowItem }
+
+procedure TDbRowItem.Assign(ASourceItem: TDbRowItem);
+begin
+  Values := ASourceItem.Values;
+  RawData := ASourceItem.RawData;
+  RawOffs := ASourceItem.RawOffs;
+end;
 
 constructor TDbRowItem.Create(AOwner: TDbRowsList);
 begin
@@ -654,6 +683,11 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  // swap endiness
+  Result := Swap(Result);
+  {Result := (((Result shr 0) and $FF) shl 8)
+         or (((Result shr 8) and $FF) shl 0); }
 end;
 
 function TRawDataReader.ReadInt32: Integer;
@@ -661,6 +695,11 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  Result := (((Result shr  0) and $FF) shl 24)
+         or (((Result shr  8) and $FF) shl 16)
+         or (((Result shr 16) and $FF) shl  8)
+         or (((Result shr 24) and $FF) shl  0);
 end;
 
 function TRawDataReader.ReadInt64: Int64;
@@ -668,6 +707,8 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  ReverseBytes(Result, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadInt8: ShortInt;
@@ -682,6 +723,10 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  // swap endiness
+  Result := (((Result shr 0) and $FF) shl 8)
+         or (((Result shr 8) and $FF) shl 0);
 end;
 
 function TRawDataReader.ReadUInt32: Cardinal;
@@ -689,6 +734,12 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  // swap endiness
+  Result := (((Result shr  0) and $FF) shl 24)
+         or (((Result shr  8) and $FF) shl 16)
+         or (((Result shr 16) and $FF) shl  8)
+         or (((Result shr 24) and $FF) shl  0);
 end;
 
 function TRawDataReader.ReadUInt64: UInt64;
@@ -696,6 +747,8 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  ReverseBytes(Result, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadUInt8: Byte;
@@ -710,6 +763,8 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  ReverseBytes(Result, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadSingle: Single;
@@ -717,6 +772,8 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  ReverseBytes(Result, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadDouble: Double;
@@ -724,6 +781,8 @@ begin
   Result := 0;
   Move(DataPtr^, Result, SizeOf(Result));
   Inc(DataPtr, SizeOf(Result));
+  if not IsBigEndian then Exit;
+  ReverseBytes(Result, SizeOf(Result));
 end;
 
 procedure TRawDataReader.ReadToBuffer(var ABuf; ASize: Integer);

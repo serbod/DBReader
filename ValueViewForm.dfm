@@ -20,7 +20,6 @@ object FormRawValue: TFormRawValue
     Height = 53
     Align = alTop
     TabOrder = 0
-    ExplicitWidth = 489
     object lbTypeText: TLabel
       Left = 16
       Top = 8
@@ -107,11 +106,10 @@ object FormRawValue: TFormRawValue
     Height = 247
     Align = alClient
     TabOrder = 1
-    ExplicitWidth = 489
     object memoText: TMemo
-      Left = 221
+      Left = 229
       Top = 1
-      Width = 293
+      Width = 285
       Height = 245
       Align = alClient
       Lines.Strings = (
@@ -119,13 +117,11 @@ object FormRawValue: TFormRawValue
       TabOrder = 0
       OnClick = memoTextChange
       OnKeyDown = memoTextKeyDown
-      ExplicitLeft = 201
-      ExplicitWidth = 287
     end
     object dgHex: TDrawGrid
       Left = 1
       Top = 1
-      Width = 220
+      Width = 228
       Height = 245
       Align = alLeft
       ColCount = 9
@@ -139,7 +135,7 @@ object FormRawValue: TFormRawValue
       Font.Style = []
       Options = [goFixedVertLine, goFixedHorzLine, goRangeSelect]
       ParentFont = False
-      ScrollBars = ssNone
+      ScrollBars = ssVertical
       TabOrder = 1
       OnDrawCell = dgHexDrawCell
     end

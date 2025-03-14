@@ -12,6 +12,7 @@ Supported databases:
 * MS Access/MS Jet 4 (.MDB, .ACCDB)
 * MS Outlook (.PST)
 * MS Exchange/MS ESE (.EDB)
+* MySQL InnoDB (.IBD)
 
 Sample projects:
 * Database browser - browse tables and inspect values
