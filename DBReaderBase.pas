@@ -179,6 +179,7 @@ function BufToHex(const Buffer; BufferSize: Integer): string;
 // Example: [01 0A BC]
 function BufferToHex(const Buffer; BufferSize: Integer): string;
 function VarToInt(const AValue: Variant): Integer;
+function VarToInt64(const AValue: Variant): Int64;
 // Raw data as printable text, non-printable chars replaced by dots
 function DataAsStr(const AData; ALen: Integer): string;
 // 2-byte data to string
@@ -258,6 +259,14 @@ begin
 end;
 
 function VarToInt(const AValue: Variant): Integer;
+begin
+  if VarIsOrdinal(AValue) then
+    Result := AValue
+  else
+    Result := 0;
+end;
+
+function VarToInt64(const AValue: Variant): Int64;
 begin
   if VarIsOrdinal(AValue) then
     Result := AValue
