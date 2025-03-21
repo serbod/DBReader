@@ -23,12 +23,12 @@ Index Page structure:
 * File trailer (8 bytes)
 
 Record structure:
-* Variable field lengths (if high bit set ($80), then read also next byte)
+* Variable field lengths (if high bit set ($80), then read also next byte, bit ($40) is blob_ref flag)
 * Null bitmap (optional, 1 bit per nullable field)
 * Record header (5 bytes)
 * Start of record (right after header) - offset from other record point here
 * Primary index columns (RowID and others) NOT NULL
-* System columns (Transaction ID, Roll Pointer) NOT NULL
+* System columns (Transaction ID, Roll Pointer) NOT NULL - if their position last?
 * Columns values (only not-null), variable lenghts look up above
 *)
 
@@ -40,13 +40,14 @@ uses
 
 type
   TInnoFieldDefRec = record
-    //TableID: Int64;            // 6 bytes
-    Pos: Integer;
-    MType: Integer;
-    PrType: Integer;
+    Pos: Integer;     // column ordinal number
+    MType: Integer;   // MySQL data type MYSQL_TYPE_
+    PrType: Integer;  // DATA_TYPE_
     Len: Integer;
-    IsVarLen: Boolean;
+    IsVarLen: Boolean;    // length stored in record header
+    IsNullable: Boolean;  // can be NULL
     ColKey: Integer;  // column_key  enum('','PRI','UNI','MUL')
+    RawOrd: Integer;  // ordinal number in raw data
     Name: AnsiString;
     TypeName: string;
   end;
@@ -61,7 +62,9 @@ type
     RecCount: Integer;
     IndexID: Int64;  // PageIndexId
     TableID: Int64;  // 6 bytes
+    FileName: string;  // if stored in separate file
     IndexName: string;
+    IndexType: Integer;
     IsPrimary: Boolean;
     PageIdArr: array of Integer;
     PageIdCount: Integer;
@@ -242,8 +245,8 @@ const
   MYSQL_TYPE_DATETIME2         = 19; // not used
   MYSQL_TYPE_TIME2             = 20; // not used
   MYSQL_TYPE_NEWDECIMAL        = 21; //
-  MYSQL_TYPE_ENUM              = 22; // ENUM
-  MYSQL_TYPE_SET               = 23;
+  MYSQL_TYPE_ENUM              = 22; // ENUM INT8
+  MYSQL_TYPE_SET               = 23; // INT64
   MYSQL_TYPE_TINY_BLOB         = 24;
   MYSQL_TYPE_MEDIUMBLOB        = 25; // MEDIUM BLOB/TEXT 11 bytes
   MYSQL_TYPE_LONGBLOB          = 26; // LONG BLOB/TEXT  12 bytes
@@ -252,13 +255,17 @@ const
   MYSQL_TYPE_STRING            = 29;
   MYSQL_TYPE_GEOMETRY          = 30;
   MYSQL_TYPE_JSON              = 31; //
-
+  // virtual types
   MYSQL_TYPE_BOOL              = $FC; // INT8 $80 or $81
-  MYSQL_TYPE_ROW_ID            = $FD; // 8-DATA_ROW_ID + 6-DATA_TRX_ID + 7-DATA_ROLL_PTR
+  MYSQL_TYPE_FIXED             = $FD; // fixed length raw data (for debug)
   MYSQL_TYPE_DEBUG             = $FE; // debug string
 
+  DATA_LEN_TINY    = $FF;
+  DATA_LEN_NORMAL  = $FFFF;
+  DATA_LEN_MEDIUM  = $FFFFFF;
+  DATA_LEN_LONG    = MaxInt; // $FFFFFFFF;
 
-                                     // size (bytes), 0-VarLen, N-FixLen
+  // todo: remove because not used       size (bytes), 0-VarLen, N-FixLen
   DATA_TYPE_VARCHAR             =  1; // 0
   DATA_TYPE_CHAR                =  2; // N  padded to the right
   DATA_TYPE_FIXBINARY           =  3; // N
@@ -298,27 +305,44 @@ const
   REC_TYPE_INFIMUM             = 2;
   REC_TYPE_SUPREMUM            = 3;
 
-  INDEX_ID_COLUMNS = $16;
-  INDEX_ID_INDEXES = $2F;
-  INDEX_ID_TABLES  = $4E;
+  COL_KEY_PRI  = 2;    // primary key
+  COL_KEY_UNI  = 3;    // unique key
+  COL_KEY_MUL  = 4;    // multiple allowed
+
+  INDEX_ID_COLUMNS     = $16;
+  INDEX_ID_INDEXES     = $2F;
+  INDEX_ID_TABLES      = $4E;
+  INDEX_ID_TABLESPACES = $5A;
 
 
-function InnoColTypeToStr(AVal, ALen: Word): string;
+function InnoColTypeToStr(AVal, ALen: Integer): string;
+var
+  sLen: string;
 begin
+  sLen := IntToStr(ALen);
+  if ALen = DATA_LEN_NORMAL then
+    sLen := '64K'
+  else
+  if ALen = DATA_LEN_MEDIUM then
+    sLen := '16M'
+  else
+  if ALen = DATA_LEN_LONG then
+    sLen := '4GB';
+
   case (AVal and DATA_TYPE_MASK) of
-    DATA_TYPE_VARCHAR:   Result := 'VARCHAR';
-    DATA_TYPE_CHAR:      Result := Format('CHAR(%d)', [ALen]);
-    DATA_TYPE_FIXBINARY: Result := Format('FIXBINARY(%d)', [ALen]);
+    DATA_TYPE_VARCHAR:   Result := Format('VARCHAR(%s)', [sLen]);
+    DATA_TYPE_CHAR:      Result := Format('CHAR(%s)', [sLen]);
+    DATA_TYPE_FIXBINARY: Result := Format('FIXBINARY(%s)', [sLen]);
     DATA_TYPE_BINARY:    Result := 'BINARY';
-    DATA_TYPE_BLOB:      Result := Format('BLOB(%d)', [ALen]);
-    DATA_TYPE_INT:       Result := Format('INT(%d)', [ALen]);
+    DATA_TYPE_BLOB:      Result := Format('BLOB(%s)', [sLen]);
+    DATA_TYPE_INT:       Result := Format('INT(%s)', [sLen]);
     DATA_TYPE_SYS_CHILD: Result := 'SYS_CHILD';
-    DATA_TYPE_SYS:       Result := Format('SYS(%d)', [ALen]);
+    DATA_TYPE_SYS:       Result := Format('SYS(%s)', [sLen]);
     DATA_TYPE_FLOAT:     Result := 'FLOAT';
     DATA_TYPE_DOUBLE:    Result := 'DOUBLE';
     DATA_TYPE_DECIMAL:   Result := 'DECIMAL';
     DATA_TYPE_VARMYSQL:  Result := 'VARMYSQL';
-    DATA_TYPE_MYSQL:     Result := Format('MYSQL(%d)', [ALen]);
+    DATA_TYPE_MYSQL:     Result := Format('MYSQL(%s)', [sLen]);
     DATA_TYPE_GEOMETRY:  Result := 'GEOMETRY';
     DATA_TYPE_DEBUG:     Result := 'DEBUG';
   else
@@ -358,7 +382,8 @@ begin
     MYSQL_TYPE_LONG,
     MYSQL_TYPE_LONGLONG,
     MYSQL_TYPE_INT24,
-    MYSQL_TYPE_ENUM:        Result := ftInteger;
+    MYSQL_TYPE_ENUM,
+    MYSQL_TYPE_SET:         Result := ftInteger;
 
     MYSQL_TYPE_FLOAT,
     MYSQL_TYPE_DOUBLE:      Result := ftFloat;
@@ -374,11 +399,12 @@ begin
     MYSQL_TYPE_TINY_BLOB,
     MYSQL_TYPE_MEDIUMBLOB,
     MYSQL_TYPE_LONGBLOB,
-    MYSQL_TYPE_BLOB:        Result := ftBytes;
+    MYSQL_TYPE_BLOB:        Result := ftString; //ftBytes;
     MYSQL_TYPE_VAR_STRING,
     MYSQL_TYPE_STRING,
     MYSQL_TYPE_JSON:        Result := ftString;
     MYSQL_TYPE_DEBUG:       Result := ftString;
+    MYSQL_TYPE_FIXED:       Result := ftBytes;
   else
     Result := ftUnknown;
   end;
@@ -485,8 +511,9 @@ begin
     sFlags := '';
     if (TmpTable.FieldInfoArr[i].PrType and DATA_FLAG_UNSIGNED) <> 0 then
       sFlags := sFlags + 'UNSIGNED ';
-    if (TmpTable.FieldInfoArr[i].PrType and DATA_FLAG_NOT_NULL) <> 0 then
-      sFlags := sFlags + 'NOT_NULL ';
+    //if (TmpTable.FieldInfoArr[i].PrType and DATA_FLAG_NOT_NULL) = 0 then
+    if TmpTable.FieldInfoArr[i].IsNullable then
+      sFlags := sFlags + 'NULLABLE ';
     if (TmpTable.FieldInfoArr[i].PrType and DATA_FLAG_BINARY_TYPE) <> 0 then
       sFlags := sFlags + 'BINARY ';
     case TmpTable.FieldInfoArr[i].ColKey of
@@ -515,63 +542,76 @@ var
   i, ii: Integer;
   TmpTable, TabTable, IdxTable, ColTable: TInnoTableInfo;
   TabRow, IdxRow, ColRow: TDbRowItem;
-  TabID, IdxID: Int64;
-  ColPos, ColType, ColLen, ColKey, nNullCount: Integer;
+  TabID, IdxID, ColLen: Int64;
+  ColPos, ColType, ColKey, IdxType, TabType, nNullCount, nVarLenCount: Integer;
   ColNotNull, ColUnsigned, IsPrimary: Boolean;
   sName, sEngine, sIdxName: string;
 begin
   TabTable := TableList.GetByIndexID(INDEX_ID_TABLES);
-  if not Assigned(TabTable) then
+  IdxTable := TableList.GetByIndexID(INDEX_ID_INDEXES);
+  if (not Assigned(TabTable)) or (not Assigned(IdxTable)) then
     Exit;
 
-  IdxTable := TableList.GetByIndexID(INDEX_ID_INDEXES);
+  // == set TableID from IndexID for readed tables
+  for i := 0 to IdxTable.Count - 1 do
+  begin
+    IdxRow := IdxTable.GetItem(i);
+    IdxID := IdxRow.Values[0]; // id
+    TabID := IdxRow.Values[3]; // table_id
+    sIdxName := IdxRow.Values[4]; // name
+    IdxType := IdxRow.Values[5]; // type
+    IsPrimary := (IdxType = 1); // type = PRIMARY
 
+    // find table info by IndexID
+    if IdxID = 0 then
+      Continue;
+    TmpTable := TableList.GetByIndexID(IdxID);
+    if Assigned(TmpTable) then
+    begin
+      TmpTable.TableID := TabID;
+      TmpTable.IndexName := sIdxName;
+      TmpTable.IndexType := IdxType;
+      TmpTable.IsPrimary := (IdxType = 1); // type = PRIMARY
+    end;
+  end;
+
+  // == set readed tables info, create non-readed tables
   for i := 0 to TabTable.Count - 1 do
   begin
     TabRow := TabTable.GetItem(i);
 
     TabID := TabRow.Values[0];
-    sName := TabRow.Values[4];
+    sName := TabRow.Values[4]; // name
+    TabType := VarToInt(TabRow.Values[5]); // type enum('BASE TABLE','VIEW','SYSTEM VIEW')
     sEngine := TabRow.Values[6];
 
-    if (TabID = 0) or (sEngine <> 'InnoDB') then
+    if (TabID = 0) or (TabType <> 1) {or (sEngine <> 'InnoDB')} then
       Continue;
 
-    IdxID := 0;
-    sIdxName := '';
-    IsPrimary := False;
-    if Assigned(IdxTable) then
+    for ii := 0 to TableList.Count - 1 do
     begin
-      for ii := 0 to IdxTable.Count - 1 do
-      begin
-        IdxRow := IdxTable.GetItem(ii);
-        if (IdxRow.Values[3] = TabID)  // table_id
-        and (IdxRow.Values[5] = 1) // type = PRIMARY
-        then
-        begin
-          IdxID := IdxRow.Values[0];
-          sIdxName := IdxRow.Values[4];
-          IsPrimary := True;
-          Break;
-        end;
-      end;
+      TmpTable := TableList.GetItem(ii);
+      if TmpTable.TableID <> TabID then
+        Continue;
+      if (TmpTable.IsPrimary) and (sEngine = 'InnoDB') then
+        TmpTable.TableName := sName
+      else
+      if (TmpTable.IsPrimary) then
+        TmpTable.TableName := sEngine + ':' + sName
+      else
+        TmpTable.TableName := sName + ':' + TmpTable.IndexName;
     end;
 
-    if IdxID <> 0 then
-      TmpTable := TableList.GetByIndexID(IdxID)
-    else
-      TmpTable := TableList.GetByTableID(TabID);
+    // create primary table info if not exists
+    TmpTable := TableList.GetByTableID(TabID);
     if not Assigned(TmpTable) then
     begin
       TmpTable := TInnoTableInfo.Create();
+      TmpTable.TableID := TabID;
+      TmpTable.TableName := sName;
+      TmpTable.IsPrimary := True;
       TableList.Add(TmpTable);
     end;
-    TmpTable.TableID := TabID;
-    TmpTable.TableName := sName;
-    TmpTable.IndexName := sIdxName;
-    if IsPrimary and (IdxID = TmpTable.IndexID) then
-      TmpTable.IsPrimary := True;
-
   end;
 
 
@@ -584,24 +624,6 @@ begin
     TmpTable := TableList.GetItem(i);
     // -- pages list
     SetLength(TmpTable.PageIdArr, TmpTable.PageIdCount);
-    // -- TableID from IndexID
-    if Assigned(IdxTable) then
-    begin
-      for ii := 0 to IdxTable.Count - 1 do
-      begin
-        IdxRow := IdxTable.GetItem(ii);
-        if ((TmpTable.IndexID <> 0) and (TmpTable.IndexID = IdxRow.Values[0]))  // same index_id
-        or ((TmpTable.TableID <> 0) and (IdxRow.Values[3] = TmpTable.TableID) and (IdxRow.Values[5] = 1)) // same table_id  and type=PRIMARY
-        then
-        begin
-          TmpTable.TableID := IdxRow.Values[3]; // table_id
-          TmpTable.IndexID := IdxRow.Values[0];
-          TmpTable.IndexName := IdxRow.Values[4];
-          TmpTable.IsPrimary := (IdxRow.Values[5] = 1);
-          Break;
-        end;
-      end;
-    end;
 
     // == columns definitions
     if TmpTable.TableID <> 0 then
@@ -621,7 +643,7 @@ begin
         sName := ColRow.Values[4];
         ColPos := VarToInt(ColRow.Values[5]);
         ColType := VarToInt(ColRow.Values[6]);
-        ColLen := Integer(VarToInt64(ColRow.Values[10])); // char_length
+        ColLen := VarToInt64(ColRow.Values[10]); // char_length
         ColKey := VarToInt(ColRow.Values[28]); // column_key  enum('','PRI','UNI','MUL')
         //ColNotNull := False;
         //if not VarIsNull(ColRow.Values[7]) then
@@ -629,24 +651,29 @@ begin
         ColUnsigned := False;
         if not VarIsNull(ColRow.Values[9]) then
           ColUnsigned := ColRow.Values[9];
+        sIdxName := VarToStrDef(ColRow.Values[29], ''); // type name
 
         // sys columns always primary
         if (ColType = MYSQL_TYPE_INT24) and (ColLen = 6) and (sName = 'DB_TRX_ID') then
-          ColKey := 2;
+          ColKey := COL_KEY_PRI;
         if (ColType = MYSQL_TYPE_LONGLONG) and (ColLen = 7) and (sName = 'DB_ROLL_PTR') then
-          ColKey := 2;
-        // VARCHAR columns not goes first
-        if (ColType = MYSQL_TYPE_VARCHAR) and (ColKey = 2) {and (ColLen > 192)} then
-          ColKey := 1;
+          ColKey := COL_KEY_PRI;
+        //  ColKey := 1;
+        if ColLen > MaxInt then
+          ColLen := MaxInt;
 
-        if (TabID <> TmpTable.TableID) or (ColKey <> 2) then
+        if ColType = MYSQL_TYPE_TIMESTAMP2 then
+          ColLen := VarToInt(ColRow.Values[13]); // datetime_precision
+
+        if (TabID <> TmpTable.TableID) or (ColKey <> COL_KEY_PRI) then
           Continue;
 
         ColNotNull := True;
 
         TmpTable.AddColDef(sName, ColType, ColLen, ColNotNull, ColUnsigned);
+        TmpTable.FieldInfoArr[High(TmpTable.FieldInfoArr)].Pos := ColPos;
         TmpTable.FieldInfoArr[High(TmpTable.FieldInfoArr)].ColKey := ColKey;
-        TmpTable.FieldInfoArr[High(TmpTable.FieldInfoArr)].TypeName := VarToStrDef(ColRow.Values[29], '');
+        TmpTable.FieldInfoArr[High(TmpTable.FieldInfoArr)].TypeName := sIdxName;
       end;
 
       // -- normal fields
@@ -655,13 +682,12 @@ begin
         ColRow := ColTable.GetItem(ii);
 
         TabID := VarToInt64(ColRow.Values[3]);
-        ColKey := VarToInt(ColRow.Values[28]); // column_key
-
         sName := ColRow.Values[4];
         ColPos := VarToInt(ColRow.Values[5]);
         ColType := VarToInt(ColRow.Values[6]);
-        //ColLen := VarToInt(ColRow.Values[11]);
-        ColLen := Integer(VarToInt64(ColRow.Values[10])); // char_length
+        //ColLen := VarToInt(ColRow.Values[11]);  // numeric_length
+        ColLen := VarToInt64(ColRow.Values[10]); // char_length
+        ColKey := VarToInt(ColRow.Values[28]); // column_key
         ColNotNull := False;
         if not VarIsNull(ColRow.Values[7]) then  // nullable
           ColNotNull := not ColRow.Values[7];
@@ -669,11 +695,9 @@ begin
         if not VarIsNull(ColRow.Values[9]) then
           ColUnsigned := ColRow.Values[9];
 
-        if (ColType = MYSQL_TYPE_VARCHAR) and (ColKey = 2) then
-          ColKey := 1;
         if (TmpTable.TableID = 4) and (TabID = 4) then  // !!!
           beep;
-        if (TabID <> TmpTable.TableID) or (ColKey = 2) {and (ColLen > 192)} then
+        if (TabID <> TmpTable.TableID) or (ColKey = COL_KEY_PRI) then
           Continue;
         // skip sys columns
         if (ColType = MYSQL_TYPE_INT24) and (ColLen = 6) and (sName = 'DB_TRX_ID') then
@@ -681,29 +705,39 @@ begin
         if (ColType = MYSQL_TYPE_LONGLONG) and (ColLen = 7) and (sName = 'DB_ROLL_PTR') then
           Continue;
 
-        if ColKey > 1 then
+        if ColKey = COL_KEY_PRI then   // keys not nullable
           ColNotNull := True;
-        if (ColType = MYSQL_TYPE_VARCHAR) and (ColLen > 192) then  // same as varchar(64) = 3õ char_length
-          ColNotNull := True;
+        if ColLen > MaxInt then
+          ColLen := MaxInt;
 
-        TmpTable.AddColDef(sName, ColType, 0, ColNotNull, ColUnsigned);
+        if ColType = MYSQL_TYPE_TIMESTAMP2 then
+          ColLen := VarToInt(ColRow.Values[13]); // datetime_precision
+
+        TmpTable.AddColDef(sName, ColType, ColLen, ColNotNull, ColUnsigned);
+        TmpTable.FieldInfoArr[High(TmpTable.FieldInfoArr)].Pos := ColPos;
         TmpTable.FieldInfoArr[High(TmpTable.FieldInfoArr)].ColKey := ColKey;
         TmpTable.FieldInfoArr[High(TmpTable.FieldInfoArr)].TypeName := VarToStrDef(ColRow.Values[29], '');
       end;
     end;
 
-    // -- Null bitmap size
+    // -- Null bitmap size and VarLen count
     nNullCount := 0;
+    nVarLenCount := 0;
     for ii := 0 to Length(TmpTable.FieldInfoArr) - 1 do
     begin
-      if (TmpTable.FieldInfoArr[ii].PrType and DATA_FLAG_NOT_NULL) = 0 then
+      if TmpTable.FieldInfoArr[ii].IsNullable then
         Inc(nNullCount);
+
+      if TmpTable.FieldInfoArr[ii].IsVarLen then
+        Inc(nVarLenCount);
     end;
     if TmpTable.NullBitmapSize = 0 then
       TmpTable.NullBitmapSize := ((nNullCount + 7) div 8); // bytes count
+    if TmpTable.VarLenCount = 0 then
+      TmpTable.VarLenCount := nVarLenCount;
 
     // debug column
-    TmpTable.AddFieldDef('DEBUG', DATA_TYPE_DEBUG, 15);
+    TmpTable.AddColDef('DEBUG', MYSQL_TYPE_DEBUG, 5 + TmpTable.NullBitmapSize + (TmpTable.VarLenCount*2));
   end;
 
 
@@ -734,33 +768,33 @@ begin
     begin
       TableName := 'SYS_PagesInfo';
       //IsSystem := True;
-      AddFieldDef('ID', DATA_TYPE_INT);
-      AddFieldDef('TypeName', DATA_TYPE_VARCHAR);
+      AddColDef('ID', MYSQL_TYPE_LONGLONG, 8);
+      AddColDef('TypeName', MYSQL_TYPE_VARCHAR, DATA_LEN_NORMAL);
 
-      AddFieldDef('FileOffset', DATA_TYPE_INT, 8);
-      AddFieldDef('Checksum', DATA_TYPE_INT);
-      AddFieldDef('Offset', DATA_TYPE_INT);
-      AddFieldDef('PagePrev', DATA_TYPE_INT);
-      AddFieldDef('PageNext', DATA_TYPE_INT);
-      AddFieldDef('PageLsn', DATA_TYPE_INT, 8);
-      AddFieldDef('PageType', DATA_TYPE_INT, 2);
-      AddFieldDef('PageFileFlushLsn', DATA_TYPE_INT, 8);
-      AddFieldDef('PageSpaceID', DATA_TYPE_INT);
+      AddColDef('FileOffset', MYSQL_TYPE_LONGLONG, 8, True, True);
+      AddColDef('Checksum', MYSQL_TYPE_LONG, 4, True, True);
+      AddColDef('Offset', MYSQL_TYPE_LONG, 4, True, True);
+      AddColDef('PagePrev', MYSQL_TYPE_LONG, 4, True, True);
+      AddColDef('PageNext', MYSQL_TYPE_LONG, 4, True, True);
+      AddColDef('PageLsn', MYSQL_TYPE_LONGLONG, 8, True, True);
+      AddColDef('PageType', MYSQL_TYPE_SHORT, 2, True, True);
+      AddColDef('PageFileFlushLsn', MYSQL_TYPE_LONGLONG, 8, True, True);
+      AddColDef('PageSpaceID', MYSQL_TYPE_LONG, 4, True, True);
 
-      AddFieldDef('PageNDirSlots', DATA_TYPE_INT, 2);
-      AddFieldDef('PageHeapTop', DATA_TYPE_INT, 2);
-      AddFieldDef('PageNHeap', DATA_TYPE_INT, 2);
-      AddFieldDef('PageFree', DATA_TYPE_INT, 2);
-      AddFieldDef('PageGarbage', DATA_TYPE_INT, 2);
-      AddFieldDef('PageLastInsert', DATA_TYPE_INT, 2);
-      AddFieldDef('PageDirection', DATA_TYPE_INT, 2);
-      AddFieldDef('PageNDirection', DATA_TYPE_INT, 2);
-      AddFieldDef('PageNRecs', DATA_TYPE_INT, 2);
-      AddFieldDef('PageMaxTrxId', DATA_TYPE_INT, 8);
-      AddFieldDef('PageLevel', DATA_TYPE_INT, 2);
-      AddFieldDef('PageIndexId', DATA_TYPE_INT, 8);
-      //AddFieldDef('PageBtrSegLeaf', COL_TYPE_BINARY, 10);
-      //AddFieldDef('PageBtrSegTop', COL_TYPE_BINARY, 10);
+      AddColDef('PageNDirSlots', MYSQL_TYPE_SHORT, 2, True, True);
+      AddColDef('PageHeapTop', MYSQL_TYPE_SHORT, 2, True, True);
+      AddColDef('PageNHeap', MYSQL_TYPE_SHORT, 2, True, True);
+      AddColDef('PageFree', MYSQL_TYPE_SHORT, 2, True, True);
+      AddColDef('PageGarbage', MYSQL_TYPE_SHORT, 2, True, True);
+      AddColDef('PageLastInsert', MYSQL_TYPE_SHORT, 2, True);
+      AddColDef('PageDirection', MYSQL_TYPE_SHORT, 2, True);
+      AddColDef('PageNDirection', MYSQL_TYPE_SHORT, 2, True);
+      AddColDef('PageNRecs', MYSQL_TYPE_SHORT, 2, True);
+      AddColDef('PageMaxTrxId', MYSQL_TYPE_LONGLONG, 8, True, True);
+      AddColDef('PageLevel', MYSQL_TYPE_SHORT, 2, True);
+      AddColDef('PageIndexId', MYSQL_TYPE_LONGLONG, 8, True, True);
+      //AddColDef('PageBtrSegLeaf', MYSQL_TYPE_FIXED, 10);
+      //AddColDef('PageBtrSegTop', MYSQL_TYPE_FIXED, 10);
     end;
   end;
 
@@ -771,28 +805,29 @@ begin
     TableName := 'SYS_Inode';
     IndexID := -4294901761; // $FFFFFFFF0000FFFF
     //IsSystem := True;
-    AddFieldDef('DEBUG', DATA_TYPE_DEBUG, 15);
-    AddFieldDef('DATA', DATA_TYPE_FIXBINARY, 41);
+    AddColDef('DATA', MYSQL_TYPE_FIXED, 41);
+    AddColDef('DEBUG', MYSQL_TYPE_DEBUG, 15);
   end; }
 
   // == mysql.ibd metadata
 
-  {TabInfo := TInnoTableInfo.Create();
+  TabInfo := TInnoTableInfo.Create();
   TableList.Add(TabInfo);
   with TabInfo do
   begin
     TableName := 'SYS_Tablespaces';
-    //PageID := 6;
-    IndexID := $3;
-    //AddFieldDef('ROW_ID', COL_TYPE_INT, 6);
-    //AddFieldDef('TRX_ID', COL_TYPE_INT, 6);
-    //AddFieldDef('ROLL_PTR', COL_TYPE_INT, 7);
-
-    AddFieldDef('DB_NAME', DATA_TYPE_VARCHAR);
-    AddFieldDef('TAB_NAME', DATA_TYPE_VARCHAR);
-    AddFieldDef('TABLE_ID', DATA_TYPE_INT, 6);
-    AddFieldDef('DATA', DATA_TYPE_FIXBINARY, 41);
-  end;  }
+    IndexID := INDEX_ID_TABLESPACES;
+    AddColDef('ID', MYSQL_TYPE_LONGLONG, 8, True, True); // BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+    AddColDef('DB_TRX_ID', MYSQL_TYPE_INT24, 6, True); // INT24(6) NOT NULL
+    AddColDef('DB_ROLL_PTR', MYSQL_TYPE_LONGLONG, 7, True); // BIGINT(7) NOT NULL
+    AddColDef('name', MYSQL_TYPE_VARCHAR, 804, True);  // VARCHAR(268) NOT NULL
+    AddColDef('options', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
+    AddColDef('se_private_data', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
+    AddColDef('comment', MYSQL_TYPE_VARCHAR, 2048*3, True);  // VARCHAR(2048) NOT NULL
+    AddColDef('engine', MYSQL_TYPE_VARCHAR, 64*3, True);  // VARCHAR(64) NOT NULL
+    AddColDef('engine_attribute', MYSQL_TYPE_JSON, DATA_LEN_MEDIUM); // JSON
+    AddColDef('DEBUG', MYSQL_TYPE_DEBUG, 20);
+  end;
 
   TabInfo := TInnoTableInfo.Create();
   TableList.Add(TabInfo);
@@ -801,27 +836,26 @@ begin
     TableName := 'SYS_indexes';
     IndexID := INDEX_ID_INDEXES;
     NullBitmapSize := 1;
-    AddFieldDef('ID', DATA_TYPE_UINT or DATA_FLAG_NOT_NULL, 8);         // BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
-    AddFieldDef('TrxID', DATA_TYPE_UINT or DATA_FLAG_NOT_NULL, 6);
-    AddFieldDef('RollPtr', DATA_TYPE_FIXBINARY or DATA_FLAG_NOT_NULL, 7);
-    //AddColDef('id', MYSQL_TYPE_LONGLONG, 0, True); // BIGINT UNSIGNED NOT NULL
+    AddColDef('ID', MYSQL_TYPE_LONGLONG, 8, True, True); // BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
+    AddColDef('DB_TRX_ID', MYSQL_TYPE_INT24, 6, True); // INT24(6) NOT NULL
+    AddColDef('DB_ROLL_PTR', MYSQL_TYPE_LONGLONG, 7, True); // BIGINT(7) NOT NULL
     AddColDef('table_id', MYSQL_TYPE_LONGLONG, 0, True, True); // BIGINT UNSIGNED NOT NULL
     AddColDef('name', MYSQL_TYPE_VARCHAR, 64, True);  // VARCHAR(64) NOT NULL
-    AddColDef('type', MYSQL_TYPE_ENUM, 0, True);  // ENUM NOT NULL
-    AddColDef('algorithm', MYSQL_TYPE_ENUM, 0, True);  // ENUM NOT NULL
+    AddColDef('type', MYSQL_TYPE_ENUM, 0, True);  // enum('PRIMARY','UNIQUE','MULTIPLE','FULLTEXT','SPATIAL') NOT NULL
+    AddColDef('algorithm', MYSQL_TYPE_ENUM, 0, True);  // enum('SE_SPECIFIC','BTREE','RTREE','HASH','FULLTEXT') NOT NULL
     AddColDef('is_algorithm_explicit', MYSQL_TYPE_BOOL, 0, True); // BOOL NOT NULL
     AddColDef('is_visible', MYSQL_TYPE_BOOL, 0, True); // BOOL NOT NULL
     AddColDef('is_generated', MYSQL_TYPE_BOOL, 0, True); // BOOL NOT NULL
     AddColDef('hidden', MYSQL_TYPE_BOOL, 0, True); // BOOL NOT NULL
     AddColDef('ordinal_position', MYSQL_TYPE_LONG, 0, True, True); // INT UNSIGNED NOT NULL
     AddColDef('comment', MYSQL_TYPE_VARCHAR, 2048, True);  // VARCHAR(2048) NOT NULL
-    AddColDef('options', MYSQL_TYPE_VARCHAR); // MEDIUMTEXT
-    AddColDef('se_private_data', MYSQL_TYPE_VARCHAR); // MEDIUMTEXT
+    AddColDef('options', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
+    AddColDef('se_private_data', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
     AddColDef('tablespace_id', MYSQL_TYPE_LONGLONG, 0, False, True); // BIGINT UNSIGNED
     AddColDef('engine', MYSQL_TYPE_VARCHAR, 64, True);  // VARCHAR(64) NOT NULL
-    AddColDef('engine_attribute', MYSQL_TYPE_JSON); // JSON
-    AddColDef('secondary_engine_attribute', MYSQL_TYPE_JSON); // JSON
-    //AddFieldDef('DEBUG', DATA_TYPE_DEBUG, 15);
+    AddColDef('engine_attribute', MYSQL_TYPE_JSON, DATA_LEN_MEDIUM); // JSON
+    AddColDef('secondary_engine_attribute', MYSQL_TYPE_JSON, DATA_LEN_MEDIUM); // JSON
+    AddColDef('DEBUG', MYSQL_TYPE_DEBUG, 20);
   end;
 
   TabInfo := TInnoTableInfo.Create();
@@ -831,42 +865,41 @@ begin
     TableName := 'SYS_columns';
     IndexID := INDEX_ID_COLUMNS; // $16
     NullBitmapSize := 3;
-    AddFieldDef('ID', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 8);         // BIGINT UNSIGNED NOT NULL
-    AddFieldDef('TrxID', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 6);
-    AddFieldDef('RollPtr', DATA_TYPE_FIXBINARY or DATA_FLAG_NOT_NULL, 7);
-    //AddColDef('id', MYSQL_TYPE_LONGLONG, 0, True); // BIGINT UNSIGNED NOT NULL
-    AddFieldDef('table_id', DATA_TYPE_UINT or DATA_FLAG_NOT_NULL, 8);  // BIGINT UNSIGNED NOT NULL
-    AddFieldDef('name', DATA_TYPE_VARCHAR or DATA_FLAG_NOT_NULL);      // VARCHAR(64) NOT NULL COLLATE
-    AddFieldDef('ordinal_position', DATA_TYPE_UINT or DATA_FLAG_NOT_NULL, 4); // T4 INT UNSIGNED NOT NULL
-    AddFieldDef('type', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 1);       // ENUM NOT NULL
+    AddColDef('ID', MYSQL_TYPE_LONGLONG, 8, True, True); // BIGINT UNSIGNED NOT NULL
+    AddColDef('DB_TRX_ID', MYSQL_TYPE_INT24, 6, True); // INT24(6) NOT NULL
+    AddColDef('DB_ROLL_PTR', MYSQL_TYPE_LONGLONG, 7, True); // BIGINT(7) NOT NULL
+    AddColDef('table_id', MYSQL_TYPE_LONGLONG, 0, True, True); // BIGINT UNSIGNED NOT NULL
+    AddColDef('name', MYSQL_TYPE_VARCHAR, 64, True); // VARCHAR(64) NOT NULL COLLATE
+    AddColDef('ordinal_position', MYSQL_TYPE_LONG, 0, True); // INT UNSIGNED NOT NULL
+    AddColDef('type', MYSQL_TYPE_ENUM, 0, True); // ENUM NOT NULL
     AddColDef('is_nullable', MYSQL_TYPE_BOOL, 0, True); // BOOL NOT NULL
     AddColDef('is_zerofill', MYSQL_TYPE_BOOL); // BOOL
     AddColDef('is_unsigned', MYSQL_TYPE_BOOL); // BOOL
-    AddFieldDef('char_length', DATA_TYPE_UINT, 4); // INT UNSIGNED
-    AddFieldDef('numeric_precision', DATA_TYPE_UINT, 4);   // INT UNSIGNED
-    AddFieldDef('numeric_scale', DATA_TYPE_UINT, 4);       // INT UNSIGNED
-    AddFieldDef('datetime_precision', DATA_TYPE_INT, 4);   // INT UNSIGNED
-    AddFieldDef('collation_id', DATA_TYPE_INT, 8);         // BIGINT UNSIGNED
+    AddColDef('char_length', MYSQL_TYPE_LONG, 0, False, True); // INT UNSIGNED
+    AddColDef('numeric_precision', MYSQL_TYPE_LONG, 0, False, True); // INT UNSIGNED
+    AddColDef('numeric_scale', MYSQL_TYPE_LONG, 0, False, True); // INT UNSIGNED
+    AddColDef('datetime_precision', MYSQL_TYPE_LONG, 0, False, True); // INT UNSIGNED
+    AddColDef('collation_id', MYSQL_TYPE_LONGLONG, 0, False, True); // BIGINT UNSIGNED
     AddColDef('has_no_default', MYSQL_TYPE_BOOL);       // BOOL
-    AddFieldDef('default_value', DATA_TYPE_BINARY);        // BLOB
-    AddFieldDef('default_value_utf8', DATA_TYPE_VARCHAR);  // TEXT
-    AddFieldDef('default_option', DATA_TYPE_BINARY);       // BLOB
-    AddFieldDef('update_option', DATA_TYPE_VARCHAR, 32);   // VARCHAR(32)
+    AddColDef('default_value', MYSQL_TYPE_BLOB, DATA_LEN_NORMAL);        // BLOB
+    AddColDef('default_value_utf8', MYSQL_TYPE_VARCHAR, DATA_LEN_NORMAL);   // TEXT
+    AddColDef('default_option', MYSQL_TYPE_VARCHAR, DATA_LEN_NORMAL);       // BLOB
+    AddColDef('update_option', MYSQL_TYPE_VARCHAR, 32);   // VARCHAR(32)
     AddColDef('is_autoincrement', MYSQL_TYPE_BOOL); // BOOL
     AddColDef('is_virtual', MYSQL_TYPE_BOOL); // BOOL
-    AddFieldDef('generation_expression', DATA_TYPE_BINARY); // LONGBLOB
-    AddFieldDef('generation_expression_utf8', DATA_TYPE_VARCHAR); // LONGTEXT
-    AddFieldDef('comment', DATA_TYPE_VARCHAR or DATA_FLAG_NOT_NULL, 2048); // VARCHAR(2048)
-    AddFieldDef('hidden', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 1);       // ENUM NOT NULL
-    AddFieldDef('options', DATA_TYPE_VARCHAR); // MEDIUMTEXT
-    AddFieldDef('se_private_data', DATA_TYPE_VARCHAR); // MEDIUMTEXT
-    AddFieldDef('column_key', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 1); // ENUM NOT NULL
-    AddFieldDef('column_type_utf8', DATA_TYPE_VARCHAR or DATA_FLAG_NOT_NULL); // MEDIUMTEXT NOT NULL
-    AddFieldDef('srs_id', DATA_TYPE_UINT, 4);       // INT UNSIGNED DEFAULT NULL
+    AddColDef('generation_expression', MYSQL_TYPE_VARCHAR, DATA_LEN_LONG); // LONGBLOB
+    AddColDef('generation_expression_utf8', MYSQL_TYPE_VARCHAR, DATA_LEN_LONG); // LONGTEXT
+    AddColDef('comment', MYSQL_TYPE_VARCHAR, 2048, True);  // VARCHAR(2048) NOT NULL
+    AddColDef('hidden', MYSQL_TYPE_ENUM, 0, True);  // ENUM NOT NULL
+    AddColDef('options', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
+    AddColDef('se_private_data', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
+    AddColDef('column_key', MYSQL_TYPE_ENUM, 0, True); // ENUM NOT NULL
+    AddColDef('column_type_utf8', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM, True); // MEDIUMTEXT NOT NULL
+    AddColDef('srs_id', MYSQL_TYPE_LONG, 0, False, True); // INT UNSIGNED DEFAULT NULL
     AddColDef('is_explicit_collation', MYSQL_TYPE_BOOL); // BOOL
-    AddFieldDef('engine_attribute', DATA_TYPE_VARCHAR); // JSON
-    AddFieldDef('secondary_engine_attribute', DATA_TYPE_VARCHAR); // JSON
-    //AddFieldDef('DEBUG', DATA_TYPE_DEBUG, 15);
+    AddColDef('engine_attribute', MYSQL_TYPE_JSON, DATA_LEN_MEDIUM); // JSON MEDIUM
+    AddColDef('secondary_engine_attribute', MYSQL_TYPE_JSON, DATA_LEN_MEDIUM); // JSON MEDIUM
+    AddColDef('DEBUG', MYSQL_TYPE_DEBUG, 20);
   end;
 
   TabInfo := TInnoTableInfo.Create();
@@ -876,24 +909,23 @@ begin
     TableName := 'SYS_tables';
     IndexID := INDEX_ID_TABLES; // $4E
     NullBitmapSize := 4;
-    AddFieldDef('ID', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 8);         // BIGINT UNSIGNED NOT NULL
-    AddFieldDef('TrxID', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 6);
-    AddFieldDef('RollPtr', DATA_TYPE_FIXBINARY or DATA_FLAG_NOT_NULL, 7);
-    //AddColDef('id', MYSQL_TYPE_LONGLONG, 0, True); // BIGINT UNSIGNED NOT NULL
-    AddFieldDef('schema_id', DATA_TYPE_INT or DATA_FLAG_NOT_NULL, 8);         // BIGINT UNSIGNED NOT NULL
-    AddFieldDef('name', DATA_TYPE_VARCHAR or DATA_FLAG_NOT_NULL); // VARCHAR(64) NOT NULL
-    AddColDef('type', MYSQL_TYPE_ENUM, 0, True);  // ENUM NOT NULL
+    AddColDef('ID', MYSQL_TYPE_LONGLONG, 8, True, True); // BIGINT UNSIGNED NOT NULL
+    AddColDef('DB_TRX_ID', MYSQL_TYPE_INT24, 6, True); // INT24(6) NOT NULL
+    AddColDef('DB_ROLL_PTR', MYSQL_TYPE_LONGLONG, 7, True); // BIGINT(7) NOT NULL
+    AddColDef('schema_id', MYSQL_TYPE_LONGLONG, 0, True, True); // BIGINT UNSIGNED NOT NULL
+    AddColDef('name', MYSQL_TYPE_VARCHAR, 64, True); // VARCHAR(64) NOT NULL
+    AddColDef('type', MYSQL_TYPE_ENUM, 0, True);  // enum('BASE TABLE','VIEW','SYSTEM VIEW') NOT NULL
     AddColDef('engine', MYSQL_TYPE_VARCHAR, 64, True);  // VARCHAR(64) NOT NULL
     AddColDef('mysql_version_id', MYSQL_TYPE_LONG, 0, True, True); // INT UNSIGNED NOT NULL
-    AddColDef('row_format', MYSQL_TYPE_ENUM);  // ENUM
+    AddColDef('row_format', MYSQL_TYPE_ENUM);  // enum('Fixed','Dynamic','Compressed','Redundant','Compact','Paged')
     AddColDef('collation_id', MYSQL_TYPE_LONGLONG, 0, False, True);  // BIGINT UNSIGNED
     AddColDef('comment', MYSQL_TYPE_VARCHAR, 2048, True);  // VARCHAR(2048) NOT NULL
-    AddColDef('hidden', MYSQL_TYPE_ENUM, 0, True);  // ENUM NOT NULL
-    AddColDef('options', MYSQL_TYPE_VARCHAR); // MEDIUMTEXT
-    AddColDef('se_private_data', MYSQL_TYPE_VARCHAR); // MEDIUMTEXT
+    AddColDef('hidden', MYSQL_TYPE_ENUM, 0, True);  // enum('Visible','System','SE','DDL') NOT NULL
+    AddColDef('options', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
+    AddColDef('se_private_data', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
     AddColDef('se_private_id', MYSQL_TYPE_LONGLONG, 0, False, True); // BIGINT UNSIGNED
     AddColDef('tablespace_id', MYSQL_TYPE_LONGLONG, 0, False, True); // BIGINT UNSIGNED
-    AddColDef('partition_type', MYSQL_TYPE_ENUM);  // ENUM
+    AddColDef('partition_type', MYSQL_TYPE_ENUM);  // enum('HASH','KEY_51','KEY_55','LINEAR_HASH','LINEAR_KEY_51','LINEAR_KEY_55','RANGE','LIST','RANGE_COLUMNS','LIST_COLUMNS','AUTO','AUTO_LINEAR')
     AddColDef('partition_expression', MYSQL_TYPE_VARCHAR, 2048);  // VARCHAR(2048)
     AddColDef('partition_expression_utf8', MYSQL_TYPE_VARCHAR, 2048);  // VARCHAR(2048)
     AddColDef('default_partitioning', MYSQL_TYPE_ENUM);  // ENUM
@@ -903,8 +935,8 @@ begin
     AddColDef('default_subpartitioning', MYSQL_TYPE_ENUM);  // ENUM
     AddColDef('created', MYSQL_TYPE_TIMESTAMP, 0, True);  // TIMESTAMP NOT NULL
     AddColDef('last_altered', MYSQL_TYPE_TIMESTAMP, 0, True);  // TIMESTAMP NOT NULL
-    AddFieldDef('view_definition', DATA_TYPE_BINARY); // LONGBLOB
-    AddColDef('view_definition_utf8', MYSQL_TYPE_VARCHAR); // LONGTEXT
+    AddColDef('view_definition', MYSQL_TYPE_VARCHAR, DATA_LEN_LONG); // LONGBLOB
+    AddColDef('view_definition_utf8', MYSQL_TYPE_VARCHAR, DATA_LEN_LONG); // LONGTEXT
     AddColDef('view_check_option', MYSQL_TYPE_ENUM);  // ENUM
     AddColDef('view_is_updatable', MYSQL_TYPE_ENUM);  // ENUM
     AddColDef('view_algorithm', MYSQL_TYPE_ENUM);  // ENUM
@@ -912,11 +944,11 @@ begin
     AddColDef('view_definer', MYSQL_TYPE_VARCHAR, 288);  // VARCHAR(288)
     AddColDef('view_client_collation_id', MYSQL_TYPE_LONGLONG, 0, False, True);  // BIGINT UNSIGNED
     AddColDef('view_connection_collation_id', MYSQL_TYPE_LONGLONG, 0, False, True);  // BIGINT UNSIGNED
-    AddColDef('view_column_names', MYSQL_TYPE_VARCHAR); // LONGTEXT
+    AddColDef('view_column_names', MYSQL_TYPE_VARCHAR, DATA_LEN_LONG); // LONGTEXT
     AddColDef('last_checked_for_upgrade_version_id', MYSQL_TYPE_LONG, 0, True, True); // INT UNSIGNED NOT NULL
-    AddColDef('engine_attribute', MYSQL_TYPE_JSON); // JSON
-    AddColDef('secondary_engine_attribute', MYSQL_TYPE_JSON); // JSON
-    //AddFieldDef('DEBUG', DATA_TYPE_DEBUG, 15);
+    AddColDef('engine_attribute', MYSQL_TYPE_JSON, DATA_LEN_MEDIUM); // JSON
+    AddColDef('secondary_engine_attribute', MYSQL_TYPE_JSON, DATA_LEN_MEDIUM); // JSON
+    AddColDef('DEBUG', MYSQL_TYPE_DEBUG, 20);
   end;
 
 end;
@@ -1118,7 +1150,7 @@ var
   bt: Byte;
   i, ii, VarSizePos, VarPos, nVarLen, nColID: Integer;
   w: Word;
-  sRecType, s, ss, sInfo: string;
+  s, ss, sInfo: string;
   NullBmp: TByteDynArray;
   TmpRow: TDbRowItem;
   sData: AnsiString;
@@ -1140,7 +1172,7 @@ var
 
       if (Result >= $80) and (ASize > 255) then
       begin
-        Result := (Result and $7F) shl 8;
+        Result := (Result and $3F) shl 8;
         rdr.SetPosition(VarSizePos);
         Result := Result or rdr.ReadUInt8;
         Dec(VarSizePos);
@@ -1173,21 +1205,21 @@ begin
   if False then
   begin
     case rec.RecordType of
-      REC_TYPE_NORMAL:   sRecType := 'NORM';
-      REC_TYPE_BTREE:    sRecType := 'BTRE';
-      REC_TYPE_INFIMUM:  sRecType := 'INFI';
-      REC_TYPE_SUPREMUM: sRecType := 'SUPR';
+      REC_TYPE_NORMAL:   s := 'NORM';
+      REC_TYPE_BTREE:    s := 'BTRE';
+      REC_TYPE_INFIMUM:  s := 'INFI';
+      REC_TYPE_SUPREMUM: s := 'SUPR';
     else
-      sRecType := 'UNKN_' + IntToStr(rec.RecordType);
+      s := 'UNKN_' + IntToStr(rec.RecordType);
     end;
 
     if rec.DeletedFlag then
-      sRecType := sRecType + ' DEL';
+      s := s + ' DEL';
     if rec.MinRecFlag then
-      sRecType := sRecType + ' MIN';
+      s := s + ' MIN';
 
     sInfo := Format('Rec %s NOwned=%d HeapNo=%d NextRec=%x RowID=%s',
-     [sRecType, rec.NOwned, rec.HeapNo, rec.NextRecord, rec.RowID]);
+     [s, rec.NOwned, rec.HeapNo, rec.NextRecord, rec.RowID]);
     LogInfo(sInfo);
   end;
 
@@ -1341,11 +1373,11 @@ begin
               TmpRow.Values[i] := dt;
             end
             else
-            if (mType = MYSQL_TYPE_BOOL) and (i64 = 128) then
-              TmpRow.Values[i] := True
-            else
-            if (mType = MYSQL_TYPE_BOOL) and (i64 = 129) then
+            if (mType in [MYSQL_TYPE_BOOL, MYSQL_TYPE_TINY]) and (i64 = 128) then
               TmpRow.Values[i] := False
+            else
+            if (mType in [MYSQL_TYPE_BOOL, MYSQL_TYPE_TINY]) and (i64 = 129) then
+              TmpRow.Values[i] := True
             else
               TmpRow.Values[i] := i64;
           end;
@@ -1456,12 +1488,17 @@ begin
     MYSQL_TYPE_VARCHAR:  PrLen := 255;
     MYSQL_TYPE_BOOL:     PrLen := 1;
     MYSQL_TYPE_ENUM:     PrLen := 1;
-    MYSQL_TYPE_TIMESTAMP: PrLen := 4;
+    MYSQL_TYPE_SET:      PrLen := 8;
+    MYSQL_TYPE_TIMESTAMP,
+    MYSQL_TYPE_TIMESTAMP2: PrLen := 4;
     //COL_FLOAT: ALength := 8;
     MYSQL_TYPE_DOUBLE:   PrLen := 8;
   end;
 
   if (ALength > 0) and ((ALength < PrLen) or (AType = MYSQL_TYPE_VARCHAR)) then
+    PrLen := ALength;
+
+  if (AType = MYSQL_TYPE_TIMESTAMP2) and (ALength > 4) then
     PrLen := ALength;
 
   PrType := 0;
@@ -1472,6 +1509,7 @@ begin
     MYSQL_TYPE_LONGLONG,
     MYSQL_TYPE_INT24,
     MYSQL_TYPE_ENUM,
+    MYSQL_TYPE_SET,
     MYSQL_TYPE_BOOL: PrType := DATA_TYPE_INT;
     MYSQL_TYPE_VARCHAR: PrType := DATA_TYPE_VARCHAR;
     MYSQL_TYPE_MEDIUMBLOB,
@@ -1482,6 +1520,7 @@ begin
     MYSQL_TYPE_TIMESTAMP2: PrType := DATA_TYPE_INT;
     //COL_FLOAT: ALength := 8;
     //COL_DOUBLE: ALength := 8;
+    MYSQL_TYPE_DEBUG: PrType := DATA_TYPE_DEBUG;
   end;
 
   if ANotNull then
@@ -1524,11 +1563,13 @@ begin
   n := Length(FieldsDef);
   SetLength(FieldsDef, Length(FieldsDef)+1);
 
+  FieldInfoArr[n].RawOrd := n;
   FieldInfoArr[n].Name := AName;
   //FieldInfoArr[n].MType := MType;
   FieldInfoArr[n].PrType := AType;
   FieldInfoArr[n].Len := ALength;
   FieldInfoArr[n].IsVarLen := (MType in [DATA_TYPE_VARCHAR, DATA_TYPE_BINARY]) or (ALength = 0);
+  FieldInfoArr[n].IsNullable := ((AType and DATA_FLAG_NOT_NULL) = 0) and (MType <> DATA_TYPE_DEBUG);
 
   FieldsDef[n].Name := AName;
   FieldsDef[n].TypeName := Format('%s(%d)', [InnoColTypeToStr(MType, ALength), ALength]);

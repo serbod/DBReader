@@ -235,7 +235,7 @@ begin
       begin
         s := TmpRow.GetFieldAsStr(ARow-1);
         if Length(s) > 100 then
-          s := Copy(s, 1, 100);
+          s := Copy(s, 1, 100) + '...';
         clText := GetFieldColor(TmpField);
         // align numbers to right side
         if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat, ftCurrency] then
@@ -270,7 +270,7 @@ begin
           s := TmpRow.GetFieldAsStr(ACol);
 
           if Length(s) > 100 then
-            s := Copy(s, 1, 100);
+            s := Copy(s, 1, 100) + '...';
           clText := GetFieldColor(TmpField);
           // align numbers to right side
           if TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint, ftFloat, ftCurrency] then
