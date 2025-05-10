@@ -491,6 +491,7 @@ begin
   ALines.Add(Format('VarLenCount=%d', [TmpTable.VarLenCount]));
   ALines.Add(Format('FixLenSize=%d', [TmpTable.FixLenSize]));
   ALines.Add(Format('NullBitmapSize=%d', [TmpTable.NullBitmapSize]));
+  ALines.Add(Format('FileName=%s', [TmpTable.FileName]));
   // PageID array
   s := '';
   for i := Low(TmpTable.PageIdArr) to High(TmpTable.PageIdArr) do
@@ -540,15 +541,16 @@ end;
 procedure TDBReaderInnoDB.FillTablesList;
 var
   i, ii: Integer;
-  TmpTable, TabTable, IdxTable, ColTable: TInnoTableInfo;
-  TabRow, IdxRow, ColRow: TDbRowItem;
-  TabID, IdxID, ColLen: Int64;
+  TmpTable, TabTable, IdxTable, ColTable, TspTable: TInnoTableInfo;
+  TabRow, IdxRow, ColRow, TspRow: TDbRowItem;
+  TabID, IdxID, TspId, ColLen: Int64;
   ColPos, ColType, ColKey, IdxType, TabType, nNullCount, nVarLenCount: Integer;
   ColNotNull, ColUnsigned, IsPrimary: Boolean;
   sName, sEngine, sIdxName: string;
 begin
   TabTable := TableList.GetByIndexID(INDEX_ID_TABLES);
   IdxTable := TableList.GetByIndexID(INDEX_ID_INDEXES);
+  TspTable := TableList.GetByIndexID(INDEX_ID_TABLESPACES);
   if (not Assigned(TabTable)) or (not Assigned(IdxTable)) then
     Exit;
 
@@ -740,6 +742,38 @@ begin
     TmpTable.AddColDef('DEBUG', MYSQL_TYPE_DEBUG, 5 + TmpTable.NullBitmapSize + (TmpTable.VarLenCount*2));
   end;
 
+  // == tables in separate files (tablespaces)
+  // indexes.table_id [3]
+  // indexes.type [5] = 1
+  // indexes.tablespace_id [15]
+  // tablespaces.name [3] = file name
+  if Assigned(TspTable) then
+  begin
+    for i := 0 to TspTable.Count - 1 do
+    begin
+      TspRow := TspTable.GetItem(i);
+      TspId := TspRow.Values[0];
+      sName := TspRow.Values[3];
+      // find primary indexes with tablespace_id
+      for ii := 0 to IdxTable.Count - 1 do
+      begin
+        IdxRow := IdxTable.GetItem(ii);
+        IdxType := IdxRow.Values[5]; // type
+        if (IdxRow.Values[15] <> TspId) or (IdxType <> 1) then
+          Continue;
+
+        IdxID := IdxRow.Values[0]; // id
+        TabID := IdxRow.Values[3]; // table_id
+        TmpTable := TableList.GetByTableID(TabID);
+        if Assigned(TmpTable) then
+        begin
+          TmpTable.FileName := sName;
+          if TmpTable.IndexID = 0 then
+            TmpTable.IndexID := IdxID;
+        end;
+      end;
+    end;
+  end;
 
   FIsMetadataLoaded := True;
 end;
@@ -817,10 +851,11 @@ begin
   begin
     TableName := 'SYS_Tablespaces';
     IndexID := INDEX_ID_TABLESPACES;
+    NullBitmapSize := 1;
     AddColDef('ID', MYSQL_TYPE_LONGLONG, 8, True, True); // BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
     AddColDef('DB_TRX_ID', MYSQL_TYPE_INT24, 6, True); // INT24(6) NOT NULL
     AddColDef('DB_ROLL_PTR', MYSQL_TYPE_LONGLONG, 7, True); // BIGINT(7) NOT NULL
-    AddColDef('name', MYSQL_TYPE_VARCHAR, 804, True);  // VARCHAR(268) NOT NULL
+    AddColDef('name', MYSQL_TYPE_VARCHAR, 268*3, True);  // VARCHAR(268) NOT NULL
     AddColDef('options', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
     AddColDef('se_private_data', MYSQL_TYPE_VARCHAR, DATA_LEN_MEDIUM); // MEDIUMTEXT
     AddColDef('comment', MYSQL_TYPE_VARCHAR, 2048*3, True);  // VARCHAR(2048) NOT NULL
@@ -1100,7 +1135,9 @@ begin
 
     TableInfo := ATableInfo;
     if not Assigned(TableInfo) then
-      TableInfo := TableList.GetByIndexID(PageHead.PageIndexId);
+      TableInfo := TableList.GetByIndexID(PageHead.PageIndexId)
+    else if TableInfo.IndexID <> PageHead.PageIndexId then
+      Exit;   
 
     if not FIsMetadataLoaded then
     begin
@@ -1401,10 +1438,13 @@ var
   i: Integer;
   PageBuf: TByteDynArray;
   iPagePos: Int64;
+  iCurPageID: Cardinal;
   TmpRow: TDbRowItem;
+  TmpFile: TStream;
+  TmpFilename: string;
 begin
   TmpTable := TableList.GetByName(AName);
-    
+
   if not Assigned(TmpTable) then
   begin
     //Assert(False, 'Table not found: ' + AName);
@@ -1426,42 +1466,57 @@ begin
     end;
     Exit;
   end;
+  TmpFile := FFile;
+  if (TmpTable.FileName <> '') and (TmpTable.FileName <> 'mysql') then
+  begin
+    TmpFilename := IncludeTrailingPathDelimiter(ExtractFilePath(Self.FileName)) + TmpTable.FileName + '.ibd';
+    if FileExists(TmpFilename) then
+      TmpFile := TFileStream.Create(TmpFilename, fmOpenRead + fmShareDenyNone);
+  end;
 
   SetLength(PageBuf, FPageSize);
-  // read pages
-  for i := Low(TmpTable.PageIdArr) to High(TmpTable.PageIdArr) do
+  if Length(TmpTable.PageIdArr) = 0 then
   begin
-    iPagePos := TmpTable.PageIdArr[i] * FPageSize;
-    if iPagePos + FPageSize <= FFile.Size then
+    // scan pages
+    iCurPageID := 0;
+    iPagePos := 0;
+    while iPagePos + FPageSize <= TmpFile.Size do
     begin
-      FFile.Position := iPagePos;
-      FFile.Read(PageBuf[0], FPageSize);
-
+      TmpFile.Position := iPagePos;
+      TmpFile.Read(PageBuf[0], FPageSize);
       ReadDataPage(PageBuf, iPagePos, TmpTable, AList);
-      {if Length(TableInfo.FieldInfoArr) <> 0 then
-      begin
-        iRecPos := INFIMUM_OFFS; // 5e + 5
-        nRecs := PageHead.PageNRecs;
-        ReadDataRecord(PageBuf, iRecPos, 13, TableInfo, nil, iNextRecOffs);     // infimum
-        while (iNextRecOffs <> 0) and (nRecs > 0) do
-        begin
-          Dec(nRecs);
-          //Inc(iRecPos, iNextRecOffs);
-          iRecPos := iRecPos + iNextRecOffs;
-          Assert(iRecPos < FPageSize);
-          if iRecPos > FPageSize then
-            Break;
-          ReadDataRecord(PageBuf, iRecPos, iNextRecOffs, TableInfo, nil, iNextRecOffs);
-        end;
-        //ReadDataRecord(PageBuf, INFIMUM_OFFS+13, 13, nil, nil);  // supremum
-      end; }
-    end
-    else
-      Assert(False, 'Page out of file: ' + IntToStr(TmpTable.PageIdArr[i]));
 
-    if Assigned(OnPageReaded) then
-      OnPageReaded(Self);
+      Inc(iCurPageID);
+      iPagePos := iCurPageID * FPageSize;
+
+      if Assigned(OnPageReaded) then
+        OnPageReaded(Self);
+    end;
+  end
+  else
+  begin
+    // read pages
+    for i := Low(TmpTable.PageIdArr) to High(TmpTable.PageIdArr) do
+    begin
+      iPagePos := TmpTable.PageIdArr[i] * FPageSize;
+      if iPagePos + FPageSize <= TmpFile.Size then
+      begin
+        TmpFile.Position := iPagePos;
+        TmpFile.Read(PageBuf[0], FPageSize);
+
+        ReadDataPage(PageBuf, iPagePos, TmpTable, AList);
+      end
+      else
+        Assert(False, 'Page out of file: ' + IntToStr(TmpTable.PageIdArr[i]));
+
+      if Assigned(OnPageReaded) then
+        OnPageReaded(Self);
+    end;
   end;
+
+  if TmpFile <> FFile then
+    TmpFile.Free();
+  
 end;
 
 { TEdbTableInfo }
