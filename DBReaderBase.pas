@@ -142,8 +142,8 @@ type
     DataPtr: PByte;
     IsBigEndian: Boolean; // Most significant byte first, 00 01 = 1
 
-    procedure InitBuf(AData: AnsiString; AStartPos: Integer = 0); overload;
-    procedure Init(const AData); overload;
+    procedure InitBuf(AData: AnsiString; AStartPos: Integer = 0; AIsBigEndian: Boolean = False); overload;
+    procedure Init(const AData; AIsBigEndian: Boolean = False); overload;
     procedure SetPosition(AOffset: Integer); // 0-based from initial position
     function GetPosition(): Integer; // 0-based from initial position
     function ReadUInt8: Byte;
@@ -152,7 +152,9 @@ type
     function ReadUInt64: UInt64;
     function ReadInt8: ShortInt;
     function ReadInt16: SmallInt;
+    function ReadInt24: Integer; // 3-byte Integer
     function ReadInt32: Integer;
+    function ReadInt48: Int64;   // 6-byte Integer
     function ReadInt64: Int64;
     function ReadCurrency: Currency;
     function ReadSingle: Single;
@@ -658,14 +660,15 @@ end;
 
 { TRawDataReader }
 
-procedure TRawDataReader.Init(const AData);
+procedure TRawDataReader.Init(const AData; AIsBigEndian: Boolean);
 begin
   Data := '';
   StartPtr := @AData;
   DataPtr := @AData;
+  IsBigEndian := AIsBigEndian;
 end;
 
-procedure TRawDataReader.InitBuf(AData: AnsiString; AStartPos: Integer);
+procedure TRawDataReader.InitBuf(AData: AnsiString; AStartPos: Integer; AIsBigEndian: Boolean);
 begin
   Data := AData;
   if AStartPos = 0 then
@@ -674,6 +677,7 @@ begin
     nPos := AStartPos;
   StartPtr := @AData[nPos];
   DataPtr := @AData[nPos];
+  IsBigEndian := AIsBigEndian;
 end;
 
 function TRawDataReader.ReadBytes(ASize: Integer): AnsiString;
@@ -699,6 +703,23 @@ begin
          or (((Result shr 8) and $FF) shl 0); }
 end;
 
+function TRawDataReader.ReadInt24: Integer;
+begin
+  Result := 0;
+  Move(DataPtr^, Result, 3);
+  Inc(DataPtr, 3);
+  // upscale to 4 bytes
+  Result := Result shr 8;
+  if Result and ($800000) <> 0 then
+    Result := Result or ($FF000000);
+
+  if not IsBigEndian then Exit;
+  Result := (((Result shr  0) and $FF) shl 24)
+         or (((Result shr  8) and $FF) shl 16)
+         or (((Result shr 16) and $FF) shl  8)
+         or (((Result shr 24) and $FF) shl  0);
+end;
+
 function TRawDataReader.ReadInt32: Integer;
 begin
   Result := 0;
@@ -709,6 +730,20 @@ begin
          or (((Result shr  8) and $FF) shl 16)
          or (((Result shr 16) and $FF) shl  8)
          or (((Result shr 24) and $FF) shl  0);
+end;
+
+function TRawDataReader.ReadInt48: Int64;
+begin
+  Result := 0;
+  Move(DataPtr^, Result, 6);
+  Inc(DataPtr, 6);
+  // upscale to 8 bytes
+  Result := Result shr 16;
+  if Result and ($800000000000) <> 0 then
+    Result := Result or ($FFFF000000000000);
+
+  if not IsBigEndian then Exit;
+  ReverseBytes(Result, SizeOf(Result));
 end;
 
 function TRawDataReader.ReadInt64: Int64;

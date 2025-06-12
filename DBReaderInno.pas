@@ -1453,7 +1453,7 @@ begin
   end;
   if not Assigned(AList) then
     AList := TmpTable;
-  AList.Clear();
+  AList.Clear();  // ???
   AList.FieldsDef := TmpTable.FieldsDef;
   if TmpTable.Count <> 0 then
   begin

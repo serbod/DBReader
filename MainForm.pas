@@ -14,6 +14,7 @@ uses
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
+  DBReaderSqlite,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -95,6 +96,7 @@ type
     procedure OpenEdb(AFileName: string);
     procedure OpenPst(AFileName: string);
     procedure OpenInnoDB(AFileName: string);
+    procedure OpenSqlite(AFileName: string);
 
     procedure OnLogHandler(const S: string);
     procedure OnPageReadedHandler(Sender: TObject);
@@ -621,7 +623,10 @@ begin
       OpenPst(FDbFileName)
     else
     if (sExt = '.ibd') or (Pos('ibdata1', ExtractFileName(FDbFileName)) > 0) then
-      OpenInnoDB(FDbFileName);
+      OpenInnoDB(FDbFileName)
+    else
+    if (sExt = '.db3') or (sExt = '.sqlite') then
+      OpenSqlite(FDbFileName);
 
   finally
     memoLog.Lines.EndUpdate();
@@ -813,6 +818,20 @@ begin
   tvMain.Items.EndUpdate();
 
   ShowTable('Messages');
+end;
+
+procedure TFormMain.OpenSqlite(AFileName: string);
+begin
+  FDBReader := TDBReaderSqlite.Create(Self);
+  InitReader(FDBReader);
+  try
+    FDBReader.OpenFile(AFileName);
+  except
+    on E: Exception do
+      memoInfo.Lines.Append(E.Message);
+  end;
+
+  FillTree();
 end;
 
 procedure TFormMain.OpenTape(AFileName: string);

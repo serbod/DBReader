@@ -180,12 +180,13 @@ object FormMain: TFormMain
   object OpenDialog: TOpenDialog
     Filter = 
       'Database files|*.gdb;*.fdb;*.cds;*.db;*.gsr;*.dbf;*.mdf;*.bak;*.' +
-      'mdb;*.accdb;*.pst;*.edb;*.ibd|Interbase/Firebird files (*.gdb, *' +
-      '.fdb)|*.gdb;*.fdb|Midas/DataSnap files (*.cds)|*.cds|Paradox fil' +
-      'es (*.db)|*.db|Mapsoft GSR files (*.gsr)|*.gsr|dBase/FoxPro (*.d' +
-      'bf)|*.dbf|MS SQL (*.mdf, *.bak)|*.mdf;*.bak|MS Access/Jet (*.mdb' +
-      ', *.accdb)|*.mdb;*.accdb|MS Outlook (*.pst)|*.pst|MS Exchange (*' +
-      '.edb)|*.edb|MySQL InnoDB (*.ibd)|*.ibd|All files (*.*)|*.*'
+      'mdb;*.accdb;*.pst;*.edb;*.ibd;*.sqlite;*.db3|Interbase/Firebird ' +
+      'files (*.gdb, *.fdb)|*.gdb;*.fdb|Midas/DataSnap files (*.cds)|*.' +
+      'cds|Paradox files (*.db)|*.db|Mapsoft GSR files (*.gsr)|*.gsr|dB' +
+      'ase/FoxPro (*.dbf)|*.dbf|MS SQL (*.mdf, *.bak)|*.mdf;*.bak|MS Ac' +
+      'cess/Jet (*.mdb, *.accdb)|*.mdb;*.accdb|MS Outlook (*.pst)|*.pst' +
+      '|MS Exchange (*.edb)|*.edb|MySQL InnoDB (*.ibd)|*.ibd|SQLite (*.' +
+      'sqlite, *.db3)|*.sqlite;*.db3|All files (*.*)|*.*'
     Left = 124
   end
 end

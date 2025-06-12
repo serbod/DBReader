@@ -13,6 +13,7 @@ Supported databases:
 * MS Outlook (.PST)
 * MS Exchange/MS ESE (.EDB)
 * MySQL InnoDB (.IBD)
+* SQLite (.DB3, .SQLITE)
 
 Sample projects:
 * Database browser - browse tables and inspect values

@@ -126,9 +126,6 @@ type
     // seek and read page by PID/FID
     function FindPage(APageID: LongWord; AFileID: Word; var APageBuf: TMdfPageBuffer): Boolean;
 
-    // 2-byte data to string
-    function WideDataToStr(AData: AnsiString): string;
-
     // define initial system tables structure
     procedure InitSystemTables();
     // fill schema tables from initial tables
@@ -1296,20 +1293,6 @@ function TDBReaderMdf.ReadWord(const APageBuf: TMdfPageBuffer; AOffset: Integer)
 begin
   Result := 0;
   System.Move(APageBuf[AOffset], Result, SizeOf(Result));
-end;
-
-function TDBReaderMdf.WideDataToStr(AData: AnsiString): string;
-var
-  ws: WideString;
-begin
-  if Length(AData) > 0 then
-  begin
-    SetLength(ws, Length(AData) div 2);
-    System.Move(AData[1], ws[1], Length(AData));
-    Result := ws;
-  end
-  else
-    Result := '';
 end;
 
 function TDBReaderMdf.ReadLongWord(const APageBuf: TMdfPageBuffer; AOffset: Integer): LongWord;

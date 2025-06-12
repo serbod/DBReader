@@ -386,14 +386,14 @@ begin
   for i := 0 to SysObjTable.Count-1 do
   begin
     TmpRow := SysObjTable.GetItem(i);
-    ObjID    := TmpRow.Values[0]; // ObjidTable
-    CatType  := TmpRow.Values[1]; // Type
-    ColID    := TmpRow.Values[2]; // Id
-    ColType  := TmpRow.Values[3]; // ColtypOrPgnoFDP
-    ColSize  := TmpRow.Values[4]; // SpaceUsage
-    ColFlags := TmpRow.Values[5]; // Flags
-    ColLocale := TmpRow.Values[6]; // PagesOrLocale
-    sName    := TmpRow.Values[7]; // Name
+    ObjID    := VarToInt(TmpRow.Values[0]); // ObjidTable
+    CatType  := VarToInt(TmpRow.Values[1]); // Type
+    ColID    := VarToInt(TmpRow.Values[2]); // Id
+    ColType  := VarToInt(TmpRow.Values[3]); // ColtypOrPgnoFDP
+    ColSize  := VarToInt(TmpRow.Values[4]); // SpaceUsage
+    ColFlags := VarToInt(TmpRow.Values[5]); // Flags
+    ColLocale := VarToInt(TmpRow.Values[6]); // PagesOrLocale
+    sName    := VarToStrDef(TmpRow.Values[7], ''); // Name
 
     TmpTable := TableList.GetByID(ObjID);
     if not Assigned(TmpTable) then
