@@ -135,9 +135,20 @@ object FormRawValue: TFormRawValue
       Font.Style = []
       Options = [goFixedVertLine, goFixedHorzLine, goRangeSelect]
       ParentFont = False
+      PopupMenu = pmHex
       ScrollBars = ssVertical
       TabOrder = 1
       OnDrawCell = dgHexDrawCell
+      ExplicitLeft = 0
+      ExplicitTop = 6
+    end
+  end
+  object pmHex: TPopupMenu
+    Left = 100
+    Top = 68
+    object miCopyToClipboard: TMenuItem
+      Caption = 'Copy to clipboard'
+      OnClick = miCopyToClipboardClick
     end
   end
 end

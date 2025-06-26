@@ -97,6 +97,8 @@ type
     property OnPageReaded: TNotifyEvent read FOnPageReaded write FOnPageReaded;
   end;
 
+  TDBReaderClass = class of TDBReader;
+
   TDbReaderDataSet = class(TDataSet)
   private
     FIsOpen: Boolean;
@@ -188,6 +190,8 @@ function DataAsStr(const AData; ALen: Integer): string;
 function WideDataToStr(AData: AnsiString): string;
 // reverse bytes order
 procedure ReverseBytes(const AData; ASize: Integer);
+// AQuotes = '""', '[]'
+function RemoveQuotes(AStr: string; AQuotes: string): string;
 
 implementation
 
@@ -322,6 +326,18 @@ begin
     Inc(bp1);
     Dec(bp2);
   end;
+end;
+
+// AQuotes = '""', '[]'
+function RemoveQuotes(AStr: string; AQuotes: string): string;
+begin
+  if Copy(AStr, 1, 1) <> Copy(AQuotes, 1, 1) then
+    Result := AStr
+  else
+  if Copy(AStr, Length(AStr), 1) <> Copy(AQuotes, 2, 1) then
+    Result := AStr
+  else
+    Result := Copy(AStr, 2, Length(AStr)-2);
 end;
 
 { TDbRowsList }

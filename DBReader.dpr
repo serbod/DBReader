@@ -17,7 +17,8 @@ uses
   FSReaderBase in 'FSReaderBase.pas',
   DBReaderEdb in 'DBReaderEdb.pas',
   DBReaderInno in 'DBReaderInno.pas',
-  DBReaderSqlite in 'DBReaderSqlite.pas';
+  DBReaderSqlite in 'DBReaderSqlite.pas',
+  DBReaderSybase in 'DBReaderSybase.pas';
 
 {$R *.res}
 

@@ -137,11 +137,6 @@ type
     LastPageNum: Cardinal;    // right-most pointer. This value appears in the header of interior b-tree pages only and is omitted from all other pages.
   end;
 
-  TSqliteFieldInfo = packed record
-    FType: Byte;
-    Size: Byte;
-  end;
-
 const
   { Sqlite record format codes }
   rfNull        = $00; // NULL
@@ -154,8 +149,8 @@ const
   rfFloat       = $07; // big-endian IEEE 754-2008 64-bit floating point number.
   rf0           = $08; // integer 0. (Only available for schema format 4 and higher.)
   rf1           = $09; // integer 1. (Only available for schema format 4 and higher.)
-  //slBlob
-  //slText
+  rfBlob        = $0C; // blob
+  rfText        = $0D; // text
 
   DB3_PAGE_TYPE_INDEX_TREE  = $02;  // interior index b-tree page
   DB3_PAGE_TYPE_TABLE_TREE  = $05;  // interior table b-tree page
@@ -190,6 +185,7 @@ begin
   else if s = 'TEXT' then Result := ftString
   else if s = 'VARCHAR' then Result := ftString
   else if s = 'NVARCHAR' then Result := ftString
+  else if s = 'CHAR' then Result := ftString
   else if s = 'NCHAR' then Result := ftString
   else if s = 'CHARACTER' then Result := ftString
   else if s = 'CLOB' then Result := ftMemo
@@ -204,19 +200,7 @@ begin
   else Result := ftUnknown;
 end;
 
-// AQuotes = '""', '[]'
-function RemoveQuotes(AStr: string; AQuotes: string): string;
-begin
-  if Copy(AStr, 1, 1) <> Copy(AQuotes, 1, 1) then
-    Result := AStr
-  else
-  if Copy(AStr, Length(AStr), 1) <> Copy(AQuotes, 2, 1) then
-    Result := AStr
-  else
-    Result := Copy(AStr, 2, Length(AStr)-2);
-end;
-
-{ TDBReaderParadox }
+{ TDBReaderSqlite }
 
 procedure TDBReaderSqlite.AfterConstruction;
 var
@@ -283,6 +267,7 @@ begin
       ]);
     ALines.Add(s);
   end;
+  Result := True;
 end;
 
 procedure TDBReaderSqlite.FillTablesList;
@@ -646,17 +631,17 @@ begin
       rf0:     v := 0;
       rf1:     v := 1;
     else
-      if (SerialType >= 12) and ((SerialType mod 2) = 0) then
+      if (SerialType >= rfBlob) and ((SerialType mod 2) = 0) then
       begin
         // BLOB
-        iVarSize := (SerialType - 12) div 2;
+        iVarSize := (SerialType - rfBlob) div 2;
         Assert(rdr.GetPosition + iVarSize <= (HeadStart + PayloadSize));
         v := rdr.ReadBytes(iVarSize);
       end
-      else if (SerialType >= 13) and ((SerialType mod 2) = 1) then
+      else if (SerialType >= rfText) and ((SerialType mod 2) = 1) then
       begin
         // TEXT
-        iVarSize := (SerialType - 13) div 2;
+        iVarSize := (SerialType - rfText) div 2;
         Assert(rdr.GetPosition + iVarSize <= (HeadStart + PayloadSize));
         // todo: check encoding
         v := UTF8Decode(rdr.ReadBytes(iVarSize));

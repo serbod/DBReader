@@ -4,7 +4,7 @@ interface
 
 uses
   Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
-  Dialogs, StdCtrls, ExtCtrls, Grids;
+  Dialogs, StdCtrls, ExtCtrls, Grids, Clipbrd, Menus;
 
 type
   TFormRawValue = class(TForm)
@@ -20,12 +20,15 @@ type
     lbRawOffs: TLabel;
     chkValue: TCheckBox;
     dgHex: TDrawGrid;
+    pmHex: TPopupMenu;
+    miCopyToClipboard: TMenuItem;
     procedure chkFullRawClick(Sender: TObject);
     procedure chkValueClick(Sender: TObject);
     procedure dgHexDrawCell(Sender: TObject; ACol, ARow: Integer; Rect: TRect;
       State: TGridDrawState);
     procedure memoTextChange(Sender: TObject);
     procedure memoTextKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+    procedure miCopyToClipboardClick(Sender: TObject);
   private
     { Private declarations }
     FSelOffs: Integer;  // offset to selected text
@@ -159,6 +162,12 @@ end;
 procedure TFormRawValue.memoTextKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
 begin
   memoTextChange(nil);
+end;
+
+procedure TFormRawValue.miCopyToClipboardClick(Sender: TObject);
+begin
+  if Length(RawData) > 0 then
+    Clipboard.AsText := BufferToHex(RawData[1], Length(RawData));
 end;
 
 procedure TFormRawValue.ShowValue(ARawData: AnsiString; ARawOffs, ARawLen: Integer);

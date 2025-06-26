@@ -14,7 +14,7 @@ uses
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
-  DBReaderSqlite,
+  DBReaderSqlite, DBReaderSybase,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -84,7 +84,6 @@ type
     procedure ShowTable(ATableName: string);
     procedure ShowCellValue();
 
-    procedure OpenFB(AFileName: string);
     procedure OpenBDB(AFileName: string);  // BerkleyDB (not tested)
     procedure OpenCDS(AFileName: string);
     procedure OpenParadox(AFileName: string);
@@ -92,11 +91,8 @@ type
     procedure OpenDbf(AFileName: string);
     procedure OpenTape(AFileName: string);
     procedure OpenMdf(AFileName: string; AStream: TStream = nil);
-    procedure OpenMdb(AFileName: string);
-    procedure OpenEdb(AFileName: string);
     procedure OpenPst(AFileName: string);
-    procedure OpenInnoDB(AFileName: string);
-    procedure OpenSqlite(AFileName: string);
+    procedure OpenDatabase(AFileName: string; AReaderClass: TDBReaderClass);
 
     procedure OnLogHandler(const S: string);
     procedure OnPageReadedHandler(Sender: TObject);
@@ -593,7 +589,7 @@ begin
   FreeAndNil(FDBReader);
   try
     if (sExt = '.gdb') or (sExt = '.fdb') then
-      OpenFB(FDbFileName)
+      OpenDatabase(FDbFileName, TDBReaderFB)
     else
     if (sExt = '.cds') then
       OpenCDS(FDbFileName)
@@ -614,24 +610,41 @@ begin
       OpenMdf(FDbFileName)
     else
     if (sExt = '.mdb') or (sExt = '.accdb') then
-      OpenMdb(FDbFileName)
+      OpenDatabase(FDbFileName, TDBReaderMdb)
     else
     if (sExt = '.edb') then
-      OpenEdb(FDbFileName)
+      OpenDatabase(FDbFileName, TDBReaderEdb)
     else
     if (sExt = '.pst') then
       OpenPst(FDbFileName)
     else
     if (sExt = '.ibd') or (Pos('ibdata1', ExtractFileName(FDbFileName)) > 0) then
-      OpenInnoDB(FDbFileName)
+      OpenDatabase(FDbFileName, TDBReaderInnoDB)
     else
     if (sExt = '.db3') or (sExt = '.sqlite') then
-      OpenSqlite(FDbFileName);
+      OpenDatabase(FDbFileName, TDBReaderSqlite)
+    else
+    if (sExt = '.dbs') then
+      OpenDatabase(FDbFileName, TDBReaderSybase);
 
   finally
     memoLog.Lines.EndUpdate();
   end;
   ProgressBar.Visible := False;
+end;
+
+procedure TFormMain.OpenDatabase(AFileName: string; AReaderClass: TDBReaderClass);
+begin
+  FDBReader := AReaderClass.Create(Self);
+  InitReader(FDBReader);
+  try
+    FDBReader.OpenFile(AFileName);
+  except
+    on E: Exception do
+      memoInfo.Lines.Append(E.Message);
+  end;
+
+  FillTree();
 end;
 
 procedure TFormMain.OpenDbf(AFileName: string);
@@ -649,36 +662,6 @@ begin
 
   // show other files from same path
   FillTreeByFiles(AFileName);
-end;
-
-procedure TFormMain.OpenEdb(AFileName: string);
-begin
-  FDBReader := TDBReaderEdb.Create(Self);
-  InitReader(FDBReader);
-  try
-    FDBReader.OpenFile(AFileName);
-  except
-    on E: Exception do
-      memoInfo.Lines.Append(E.Message);
-  end;
-
-  FillTree();
-end;
-
-procedure TFormMain.OpenFB(AFileName: string);
-begin
-  FDBReader := TDBReaderFB.Create(Self);
-  InitReader(FDBReader);
-  //FReader.IsLogBlobs := True;
-  //FReader.DebugRelID := 12;
-  try
-    FDBReader.OpenFile(AFileName);
-  except
-    on E: Exception do
-      memoInfo.Lines.Append(E.Message);
-  end;
-
-  FillTree();
 end;
 
 procedure TFormMain.OpenGsr(AFileName: string);
@@ -720,36 +703,6 @@ begin
   end;
   tvMain.Items.EndUpdate();
 {$endif}
-end;
-
-procedure TFormMain.OpenInnoDB(AFileName: string);
-begin
-  FDBReader := TDBReaderInnoDB.Create(Self);
-  InitReader(FDBReader);
-  try
-    FDBReader.OpenFile(AFileName);
-  except
-    on E: Exception do
-      memoInfo.Lines.Append(E.Message);
-  end;
-
-  // Fill tree
-  FillTree();
-end;
-
-procedure TFormMain.OpenMdb(AFileName: string);
-begin
-  FDBReader := TDBReaderMdb.Create(Self);
-  InitReader(FDBReader);
-  try
-    FDBReader.OpenFile(AFileName);
-  except
-    on E: Exception do
-      memoInfo.Lines.Append(E.Message);
-  end;
-
-  // Fill tree
-  FillTree();
 end;
 
 procedure TFormMain.OpenMdf(AFileName: string; AStream: TStream);
@@ -818,20 +771,6 @@ begin
   tvMain.Items.EndUpdate();
 
   ShowTable('Messages');
-end;
-
-procedure TFormMain.OpenSqlite(AFileName: string);
-begin
-  FDBReader := TDBReaderSqlite.Create(Self);
-  InitReader(FDBReader);
-  try
-    FDBReader.OpenFile(AFileName);
-  except
-    on E: Exception do
-      memoInfo.Lines.Append(E.Message);
-  end;
-
-  FillTree();
 end;
 
 procedure TFormMain.OpenTape(AFileName: string);
@@ -970,7 +909,7 @@ begin
     dgItems.RowCount := FRowsList.Count + 1;
     for i := 0 to Length(FRowsList.FieldsDef) - 1 do
     begin
-      TmpField := FRowsList.FieldsDef[0];
+      TmpField := FRowsList.FieldsDef[i];
       //if (Pos('_name', FColNames[i]) > 0) or (ColItem.ValueSize > 40) then
       if (TmpField.Size > 40)
       or (TmpField.FieldType in [ftBlob, ftMemo])
