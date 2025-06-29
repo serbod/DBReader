@@ -94,16 +94,13 @@ object FormMain: TFormMain
         TabOrder = 0
         OnDblClick = dgItemsDblClick
         OnDrawCell = dgItemsDrawCell
+        OnKeyDown = dgItemsKeyDown
         OnSelectCell = dgItemsSelectCell
       end
     end
     object tsTableInfo: TTabSheet
       Caption = 'Table Info'
       ImageIndex = 2
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoInfo: TMemo
         AlignWithMargins = True
         Left = 4
@@ -128,10 +125,6 @@ object FormMain: TFormMain
     end
     object tsLog: TTabSheet
       Caption = 'Log'
-      ExplicitLeft = 0
-      ExplicitTop = 0
-      ExplicitWidth = 0
-      ExplicitHeight = 0
       object memoLog: TMemo
         AlignWithMargins = True
         Left = 4

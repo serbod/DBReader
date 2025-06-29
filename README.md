@@ -14,6 +14,7 @@ Supported databases:
 * MS Exchange/MS ESE (.EDB)
 * MySQL InnoDB (.IBD)
 * SQLite (.DB3, .SQLITE)
+* Sybase SQL Anywhere (.DB)
 
 Sample projects:
 * Database browser - browse tables and inspect values

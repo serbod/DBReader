@@ -1,12 +1,12 @@
 unit DBReaderSybase;
 
 (*
-Sybase database file reader
+Sybase/Watcom database file reader
 
 Author: Sergey Bodrov, 2025 Minsk
 License: MIT
 
-
+Data format guessed from sample databases
 *)
 
 interface
@@ -31,6 +31,7 @@ type
     RowCount: Integer;
     ColCount: Integer;
     NullCount: Integer;  // nullable fields count
+    BoolCount: Integer;  // boolean fields count
     PageIdArr: array of Integer;
     PageIdCount: Integer;
     FieldInfoArr: array of TSybaseFieldDef;
@@ -126,6 +127,8 @@ const
   SY_COL_TYPE_CHAR2    = 9;   // 128  remote_name
   SY_COL_TYPE_TEXT     = 10;
   SY_COL_TYPE_TEXT2    = 11;  // 1280 collation_order
+  SY_COL_TYPE_DATETIME = 13;  // 8    date
+  SY_COL_TYPE_BOOLEAN  = 19;  // 1    flag  (bitmap for next bool columns)
   SY_COL_TYPE_UINT64   = 20;  // 8    max_identity
   SY_COL_TYPE_UINT32   = 21;  // 4    table_id, first_page
   SY_COL_TYPE_INT64    = 23;  // 8    creator
@@ -158,6 +161,8 @@ begin
     SY_COL_TYPE_CHAR2:    Result := 'CHAR';
     SY_COL_TYPE_TEXT:     Result := 'TEXT';
     SY_COL_TYPE_TEXT2:    Result := 'TEXT';
+    SY_COL_TYPE_DATETIME: Result := 'DATETIME';
+    SY_COL_TYPE_BOOLEAN:  Result := 'BOOLEAN';
     SY_COL_TYPE_UINT64:   Result := 'INT';
     SY_COL_TYPE_UINT32:   Result := 'INT';
     SY_COL_TYPE_INT64:    Result := 'INT';
@@ -204,8 +209,8 @@ begin
   else if s = 'FLOAT' then Result := SY_COL_TYPE_UNKNOWN
   else if s = 'NUMERIC' then Result := SY_COL_TYPE_NUMERIC
   else if s = 'DATE' then Result := SY_COL_TYPE_DATE
-  else if s = 'DATETIME' then Result := SY_COL_TYPE_UNKNOWN
-  else if s = 'BOOLEAN' then Result := SY_COL_TYPE_UNKNOWN
+  else if s = 'DATETIME' then Result := SY_COL_TYPE_DATETIME
+  else if s = 'BOOLEAN' then Result := SY_COL_TYPE_BOOLEAN
   else Result := SY_COL_TYPE_UNKNOWN;
 end;
 
@@ -385,6 +390,7 @@ begin
   ALines.Add(Format('TableID=%x', [TmpTable.TableID]));
   ALines.Add(Format('ColCount=%d', [TmpTable.ColCount]));
   ALines.Add(Format('NullCount=%d', [TmpTable.NullCount]));
+  ALines.Add(Format('BoolCount=%d', [TmpTable.BoolCount]));
   // PageNum array
   s := '';
   for i := Low(TmpTable.PageIdArr) to High(TmpTable.PageIdArr) do
@@ -451,6 +457,7 @@ begin
         // columns
         TmpTable.ColCount := 0;
         TmpTable.NullCount := 0;
+        TmpTable.BoolCount := 0;
         if VarToInt(TabRow.Values[6]) = 0 then    // creator
           TmpTable.TableType := SY_TABLE_TYPE_SYS;
 
@@ -495,6 +502,7 @@ var
   rdr: TRawDataReader;
   iPagePos: Int64;
   iCurPageID: Cardinal;
+  bt: Integer;
 begin
   Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
@@ -502,9 +510,24 @@ begin
   FPageSize := $800;
 
   // read header
-  //FFile.ReadBuffer(FileHead, SizeOf(FileHead));
-  //ReverseBytes(FileHead.PageSize, 2);
+  SetLength(PageBuf, FPageSize);
+  FFile.Position := 0;
+  FFile.Read(PageBuf[0], FPageSize);
+  rdr.Init(PageBuf[0], False);
 
+  rdr.SetPosition($09);   // 03, 07, 0F
+  bt := rdr.ReadUInt8;
+
+  rdr.SetPosition($1A);   // 0A, 0B, 0C
+  bt := rdr.ReadUInt8;
+  case bt of
+    $0A: FPageSize := $0400;
+    $0B: FPageSize := $0800;
+    $0C: FPageSize := $1000;
+    $0D: FPageSize := $2000;
+    $0E: FPageSize := $4000;
+    $0F: FPageSize := $8000;
+  end;
   SetLength(PageBuf, FPageSize);
 
   // scan pages
@@ -661,9 +684,10 @@ begin
     iRowOffs2 := FPageSize;
     for i := Low(RecOffsArr) to High(RecOffsArr) do
     begin
-      //iRowOffs := Swap(RecOffsArr[i]);  // swap big-endian bytes
+      if RecOffsArr[i] = 0 then   // deleted record ?
+        Continue;
       iRowOffs := SY_PAGE_HEAD_SIZE + RecOffsArr[i];
-      iRowSize := iRowOffs2 - iRowOffs + 1;
+      iRowSize := iRowOffs2 - iRowOffs;
 
       if (iRowSize < 0) or (not (iRowOffs < FPageSize)) then
       begin
@@ -711,17 +735,25 @@ var
   i, iVarSize, iShift, iPos: Integer;
   s: string;
 begin
-  // <len> <shift>  [AA BB CC]
-  // 51432 = 5_14_32 = 05 0E 20 (little-enddian)
+  // <len> <shift> [len bytes]
+  // 51432 = 5_14_32 = 05 0E 20 (little-enddian) len=3, shift=C0
   // shift C0 = (10^0), C1 = (10^2), BF = (10^-2)
+  // if len = 0, there no shift
   iVarSize := rdr.ReadUInt8;
   iShift := rdr.ReadUInt8;
   s := '';
-  for i := 1 to iVarSize do
+  if iVarSize > 0 then
   begin
-    s := Format('%.2d', [rdr.ReadUInt8]) + s;
+  for i := 1 to iVarSize do
+      s := Format('%.2d', [rdr.ReadUInt8]) + s;
+    iShift := $C0 - iShift;
+  end
+  else
+  begin
+    s := Format('%.2d', [iShift]);
+    iShift := 0;
   end;
-  iShift := $C0 - iShift;
+
   while (iShift < 0) do
   begin
     s := s + '00';
@@ -778,8 +810,10 @@ var
   rdr: TRawDataReader;
   TmpRow: TDbRowItem;
   NullBmp: TByteDynArray;
-  RowSize, TmpPos, iColType, iColSize: Integer;
-  i, iCol, iNullCol, iColCount, iVarSize, iBitmapLen: Integer;
+  BoolArr: TByteDynArray;
+  RowSize, TmpPos, iColType, iColSize, iColCount: Integer;
+  i, iCol, iNullCol, iVarSize, iBitmapLen, iBool: Integer;
+  i8: Byte;
   i32: LongInt;
   i64: Int64;
   v: Variant;
@@ -789,11 +823,22 @@ begin
   // == record format:
   // RowSize     u16
   // NullBitmap  (NullCount div 8) bytes
-  //
+  // columns data     (except BoolCols)
+  // BoolCols    u8    boolean columns, if > 1
 
+  Result := False;
   rdr.Init(APageBuf[0], False);
   rdr.SetPosition(ARowOffs);
   RowSize := rdr.ReadUInt16;
+
+  if (RowSize and $4000) <> 0 then  // reference ?
+  begin
+    // u32  page id
+    // u8   record
+  end;
+
+  if (RowSize > ARowSize) and (not IsDebugRows) then
+    Exit;
 
   // Null bitmap
   iBitmapLen := ((ATableInfo.NullCount + 7) div 8); // bytes count
@@ -810,18 +855,31 @@ begin
   iColCount := Length(AList.FieldsDef);
   SetLength(TmpRow.Values, iColCount);
 
+  TmpPos := rdr.GetPosition;
   // raw data
   if IsDebugRows then
   begin
     SetLength(TmpRow.RawOffs, Length(ATableInfo.FieldsDef));
-    TmpPos := rdr.GetPosition;
     rdr.SetPosition(ARowOffs);
     TmpRow.RawData := rdr.ReadBytes(ARowSize);
     rdr.SetPosition(TmpPos);
   end;
 
+  // BoolCols
+  if ATableInfo.BoolCount > 1 then
+  begin
+    SetLength(BoolArr, ATableInfo.BoolCount);
+    rdr.SetPosition(ARowSize - ATableInfo.BoolCount);
+    rdr.ReadToBuffer(BoolArr[0], ATableInfo.BoolCount);
+    rdr.SetPosition(TmpPos);
+  end;
+
+  if (RowSize > ARowSize) then
+    Exit;
+
   iCol := 0;
   iNullCol := -1;
+  iBool := 0;  // boolean field count
   while (iCol < iColCount) and (rdr.GetPosition <= (ARowOffs + RowSize)) do
   begin
     Assert(iCol < ATableInfo.ColCount, Format('Table %s body read >%d columns!', [ATableInfo.TableName, ATableInfo.ColCount]));
@@ -860,10 +918,32 @@ begin
           end;
        end;
 
-       SY_COL_TYPE_DATE:   // munutes ?
+       SY_COL_TYPE_BOOLEAN:
+       begin
+         if ATableInfo.BoolCount > 1 then
+           v := (BoolArr[iBool] <> 0)
+         else
+           v := (rdr.ReadUInt8 <> 0);
+         Inc(iBool);
+         {if iBool = 0 then
+           i8 := rdr.ReadUInt8;
+         // bit from cumulative bitmap
+         v := (((i8 shr iBool) and $1) <> 0);
+         Inc(iBool);
+         if iBool > 7 then
+           iBool := 0;  }
+       end;
+
+       SY_COL_TYPE_DATE,
+       SY_COL_TYPE_DATETIME:
+       begin
+         i32 := rdr.ReadInt32; // munutes
+         dt := (i32 div 1440) - 109512;  // days - epoch
+         if iColType = SY_COL_TYPE_DATETIME then
        begin
          i32 := rdr.ReadInt32;
-         dt := (i32 div 1440) - 109512;  // days - epoch
+           // todo: subminutes
+         end;
          v := dt;
        end;
 
@@ -991,6 +1071,9 @@ begin
   Inc(ColCount);
   if FieldInfoArr[n].IsNullable then
     Inc(NullCount);
+
+  if FieldInfoArr[n].FieldType = SY_COL_TYPE_BOOLEAN then
+    Inc(BoolCount);
 end;
 
 procedure TSybaseTableInfo.AddPageID(APageID: Cardinal);

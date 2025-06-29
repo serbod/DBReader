@@ -58,6 +58,7 @@ type
     procedure miDBGrid1Click(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
     procedure miShowAsHexClick(Sender: TObject);
+    procedure dgItemsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
   private
     { Private declarations }
     FLogStream: TStream;
@@ -83,6 +84,8 @@ type
     procedure FillTreeByFiles(AFileName: string);
     procedure ShowTable(ATableName: string);
     procedure ShowCellValue();
+    // find next cell with same value and focus it
+    procedure FindNextCell();
 
     procedure OpenBDB(AFileName: string);  // BerkleyDB (not tested)
     procedure OpenCDS(AFileName: string);
@@ -307,6 +310,12 @@ begin
   {$endif}
 end;
 
+procedure TFormMain.dgItemsKeyDown(Sender: TObject; var Key: Word; Shift: TShiftState);
+begin
+  if Key = VK_F3 then
+    FindNextCell();
+end;
+
 procedure TFormMain.dgItemsSelectCell(Sender: TObject; ACol, ARow: Integer; var CanSelect: Boolean);
 begin
   FCurRowIndex := ARow - 1;
@@ -469,6 +478,64 @@ begin
   end;
 
   tvMain.Items.EndUpdate;
+end;
+
+procedure TFormMain.FindNextCell;
+var
+  //TmpField: TDbFieldDefRec;
+  TmpRow: TDbRowItem;
+  //i, iOffs, iLen: Integer;
+  CurRowIndex: Integer;
+  v: Variant;
+begin
+  v := Null;
+  CurRowIndex := FCurRowIndex;
+  if (FCurRowIndex <= FRowsList.Count) and (FCurColIndex < Length(FRowsList.FieldsDef)) then
+  begin
+    TmpRow := FRowsList.GetItem(FCurRowIndex);
+    if Assigned(TmpRow) then
+    begin
+      if FCurColIndex < Length(TmpRow.Values) then
+      begin
+        //s := VarToStrDef(TmpRow.Values[ACol], 'null');
+        //s := TmpRow.GetFieldAsStr(FCurRowIndex);
+        v := TmpRow.Values[FCurColIndex];
+      end;
+    end;
+  end;
+
+  Inc(CurRowIndex);
+  while CurRowIndex < FRowsList.Count do
+  begin
+    TmpRow := FRowsList.GetItem(CurRowIndex);
+    if Assigned(TmpRow)
+    and (FCurColIndex < Length(TmpRow.Values))
+    and (v = TmpRow.Values[FCurColIndex]) then
+    begin
+      // found, set focused
+      FCurRowIndex := CurRowIndex;
+      dgItems.Row := FCurRowIndex + 1;
+      Exit;
+    end;
+    Inc(CurRowIndex);
+  end;
+
+  // if not found below, search from above
+  CurRowIndex := 0;
+  while CurRowIndex < FCurRowIndex do
+  begin
+    TmpRow := FRowsList.GetItem(CurRowIndex);
+    if Assigned(TmpRow)
+    and (FCurColIndex < Length(TmpRow.Values))
+    and (v = TmpRow.Values[FCurColIndex]) then
+    begin
+      // found, set focused
+      FCurRowIndex := CurRowIndex;
+      dgItems.Row := FCurRowIndex + 1;
+      Exit;
+    end;
+    Inc(CurRowIndex);
+  end;
 end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
