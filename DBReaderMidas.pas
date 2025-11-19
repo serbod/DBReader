@@ -10,10 +10,14 @@ https://alexeevd.narod.ru/papers/cds_format.htm
 
 *)
 
+{$ifdef FPC}
+  {$MODE Delphi}
+{$endif}
+
 interface
 
 uses
-  Windows, SysUtils, Classes, Variants, DB, DBReaderBase;
+  SysUtils, Classes, Variants, DB, DBReaderBase;
 
 type
   TDSProp = record
@@ -427,9 +431,11 @@ end;
 function TDBReaderMidas.ReadTimestamp: TDateTime;
 var
   ts: TTimeStamp;
+  c: Comp;
 begin
   // Float type value of milliseconds
-  ts := MSecsToTimeStamp(ReadFloat);
+  c := Trunc(ReadFloat);
+  ts := MSecsToTimeStamp(c);
   Result := TimeStampToDateTime(ts);
 end;
 

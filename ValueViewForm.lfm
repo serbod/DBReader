@@ -1,0 +1,152 @@
+object FormRawValue: TFormRawValue
+  Left = 0
+  Height = 300
+  Top = 0
+  Width = 515
+  Caption = 'Raw value'
+  ClientHeight = 300
+  ClientWidth = 515
+  Color = clBtnFace
+  Font.Color = clWindowText
+  Font.Height = -13
+  Font.Name = 'Tahoma'
+  LCLVersion = '4.4.0.0'
+  object panTop: TPanel
+    Left = 0
+    Height = 53
+    Top = 0
+    Width = 515
+    Align = alTop
+    ClientHeight = 53
+    ClientWidth = 515
+    ParentBackground = False
+    TabOrder = 0
+    object lbTypeText: TLabel
+      Left = 16
+      Height = 16
+      Top = 8
+      Width = 33
+      Caption = 'Type:'
+    end
+    object lbType: TLabel
+      Left = 55
+      Height = 16
+      Top = 8
+      Width = 64
+      Caption = 'Undefined'
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = 'Tahoma'
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object lbSize: TLabel
+      Left = 55
+      Height = 16
+      Top = 27
+      Width = 8
+      Caption = '0'
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = 'Tahoma'
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object lbSizeText: TLabel
+      Left = 16
+      Height = 16
+      Top = 27
+      Width = 29
+      Caption = 'Size:'
+    end
+    object lbRawOffsText: TLabel
+      Left = 348
+      Height = 16
+      Top = 8
+      Width = 60
+      Caption = 'RAW Offs:'
+    end
+    object lbRawOffs: TLabel
+      Left = 412
+      Height = 16
+      Top = 8
+      Width = 8
+      Caption = '0'
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = 'Tahoma'
+      Font.Style = [fsBold]
+      ParentFont = False
+    end
+    object chkFullRaw: TCheckBox
+      Left = 348
+      Height = 17
+      Top = 26
+      Width = 97
+      Caption = 'Full RAW'
+      TabOrder = 0
+      OnClick = chkFullRawClick
+    end
+    object chkValue: TCheckBox
+      Left = 236
+      Height = 17
+      Top = 26
+      Width = 97
+      Caption = 'Value'
+      TabOrder = 1
+      OnClick = chkValueClick
+    end
+  end
+  object panDataView: TPanel
+    Left = 0
+    Height = 247
+    Top = 53
+    Width = 515
+    Align = alClient
+    ClientHeight = 247
+    ClientWidth = 515
+    ParentBackground = False
+    TabOrder = 1
+    object memoText: TMemo
+      Left = 229
+      Height = 245
+      Top = 1
+      Width = 285
+      Align = alClient
+      Lines.Strings = (
+        'memoText'
+      )
+      TabOrder = 0
+      OnClick = memoTextChange
+      OnKeyDown = memoTextKeyDown
+    end
+    object dgHex: TDrawGrid
+      Left = 1
+      Height = 245
+      Top = 1
+      Width = 228
+      Align = alLeft
+      ColCount = 9
+      DefaultColWidth = 20
+      DefaultRowHeight = 16
+      FixedRows = 0
+      Font.Color = clWindowText
+      Font.Height = -13
+      Font.Name = 'Courier New'
+      Options = [goFixedVertLine, goFixedHorzLine, goRangeSelect]
+      ParentFont = False
+      PopupMenu = pmHex
+      ScrollBars = ssVertical
+      TabOrder = 1
+      OnDrawCell = dgHexDrawCell
+    end
+  end
+  object pmHex: TPopupMenu
+    Left = 100
+    Top = 68
+    object miCopyToClipboard: TMenuItem
+      Caption = 'Copy to clipboard'
+      OnClick = miCopyToClipboardClick
+    end
+  end
+end

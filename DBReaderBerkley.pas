@@ -12,7 +12,7 @@ https://transactional.blog/building-berkeleydb/page-format
 interface
 
 uses
-  Windows, SysUtils, Classes, Variants, DBReaderBase;
+  SysUtils, Classes, Variants, DBReaderBase;
 
 type
   TDBReaderBerkley = class(TDBReader)
@@ -132,7 +132,7 @@ end;
 
 function TDBReaderBerkley.FillTableInfoText(ATableName: string; ALines: TStrings): Boolean;
 begin
-
+  Result := False;
 end;
 
 function TDBReaderBerkley.OpenFile(AFileName: string; AStream: TStream): Boolean;
@@ -168,6 +168,8 @@ begin
   LogInfo(Format('Version=%d', [FDbVersion]));
 
   // pages list
+  OffsArr := [];
+  sData := '';
   nPage := 1;
   nPos := nPage * FPageSize;
   while nPos < (FFile.Size - 1024) do

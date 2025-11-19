@@ -12,7 +12,7 @@ Data format guessed from sample databases
 interface
 
 uses
-  Windows, SysUtils, Classes, Types, Variants, DB, DBReaderBase, RFUtils;
+  SysUtils, Classes, Types, Variants, DB, DBReaderBase, RFUtils;
 
 type
   TSybaseFieldDef = record

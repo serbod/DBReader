@@ -13,7 +13,7 @@ https://sqlite.org/fileformat.html
 interface
 
 uses
-  Windows, SysUtils, Classes, Types, Variants, DB, DBReaderBase, RFUtils;
+  SysUtils, Classes, Types, Variants, DB, DBReaderBase, RFUtils;
 
 type
   TSqliteFieldDef = record
@@ -44,6 +44,7 @@ type
     procedure SetSQL(ASql: string);
     // AType - "TypeName(Size)"
     procedure AddFieldDef(AName, AType: string);
+    // Note: adds extra empty numbers (grow)
     procedure AddPageNum(ANum: Cardinal);
   end;
 
@@ -60,7 +61,7 @@ type
   TDBReaderSqlite = class(TDBReader)
   private
     FTableList: TSqliteTableInfoList;
-    FDbVersion: Integer;
+    //FDbVersion: Integer;
     FPageSize: Integer;
     FPageEnd: Integer; // PageSize - UnusedSize
     FIsMetadataLoaded: Boolean;
@@ -274,7 +275,7 @@ procedure TDBReaderSqlite.FillTablesList;
 var
   TmpTable, TmpTable2: TSqliteTableInfo;
   TmpRow: TDbRowItem;
-  i, ii, iii, n: Integer;
+  i, ii, iii: Integer;
   RootPageNum: Cardinal;
 begin
   FIsMetadataLoaded := True;
@@ -312,19 +313,28 @@ begin
     TmpTable := TableList.GetItem(i);
     if TmpTable.TableSQL = '' then
       Continue;
+
     for ii := Low(TmpTable.PageNumArr) to High(TmpTable.PageNumArr) do
     begin
       TmpTable2 := TableList.GetByPageNum(TmpTable.PageNumArr[ii]);
-      if Assigned(TmpTable2) then
+      if Assigned(TmpTable2) and (TmpTable2 <> TmpTable) then
       begin
         TmpTable.RowCount := -1;
         // copy orphan table page nums
         for iii := Low(TmpTable2.PageNumArr) to High(TmpTable2.PageNumArr) do
           TmpTable.AddPageNum(TmpTable2.PageNumArr[iii]);
-        SetLength(TmpTable.PageNumArr, TmpTable.PageNumCount);
+        SetLength(TmpTable.PageNumArr, TmpTable.PageNumCount); // normalize page num array
         // mark orphan table as deleted
         TmpTable2.RowCount := -2;
       end;
+    end;
+    // for single-page tables, add RootPageNum to PageNumArr
+    if (Length(TmpTable.PageNumArr) = 0) and (TmpTable.RootPageNum <> 0) then
+    begin
+      TmpTable.AddPageNum(TmpTable.RootPageNum);
+      SetLength(TmpTable.PageNumArr, TmpTable.PageNumCount); // normalize page num array
+      if TmpTable.RowCount = 0 then
+        TmpTable.RowCount := -1;
     end;
   end;
   // delete marked tables
@@ -369,6 +379,7 @@ begin
   end;
   if FPageSize = 1 then
     FPageSize := 65536;
+  PageBuf := [];
   SetLength(PageBuf, FPageSize);
   FPageEnd := FPageSize - FileHead.UnusedSize;
 
@@ -458,7 +469,8 @@ A b-tree page is divided into regions in the following order:
     Exit;
 
   // check page
-  if (PageHead.PageType = DB3_PAGE_TYPE_TABLE_TREE) and (not FIsMetadataLoaded) then
+  if (not FIsMetadataLoaded)
+  and ( (PageHead.PageType = DB3_PAGE_TYPE_TABLE_TREE) or (CurPageNum = 1) ) then
   begin
     if Assigned(ATableInfo) and (ATableInfo.RootPageNum <> CurPageNum) then
       Exit;
@@ -473,9 +485,16 @@ A b-tree page is divided into regions in the following order:
       ATableInfo.RowCount := -1; // not empty
       TableList.Add(ATableInfo);
     end;
+
+    if (CurPageNum = 1) and (PageHead.PageType = DB3_PAGE_TYPE_TABLE_LEAF) then
+    begin
+      // store PageID
+      ATableInfo.AddPageNum(CurPageNum);
+    end;
   end;
 
   // rec offs list
+  RecOffsArr := [];
   SetLength(RecOffsArr, PageHead.RecCount);
   if PageHead.RecCount > 0 then
   begin
@@ -562,6 +581,7 @@ begin
   begin
     // payload from multiple pages
     PayloadBufPos := 0;
+    PayloadBuf := [];
     SetLength(PayloadBuf, PayloadSize);
     // payload first part size computation
     PayloadMinSize := (((FPageEnd - 12) * 32) div 255) - 23;
@@ -595,13 +615,18 @@ begin
   // Payload Header
   HeadSize := ReadVarInt(rdr);
   iCol := 0;
+  SerTypeArr := [];
   SetLength(SerTypeArr, ATableInfo.ColCount);
   while (rdr.GetPosition < (HeadStart + HeadSize)) do
   begin
-    Assert(iCol < ATableInfo.ColCount, Format('Table %s head read >%d columns!', [ATableInfo.TableName, ATableInfo.ColCount]));
+    // Row can have more columns, than defined in scheme. Unused columns have default values.
+    //Assert(iCol < ATableInfo.ColCount, Format('Table %s head read >%d columns!', [ATableInfo.TableName, ATableInfo.ColCount]));
     SerialType := ReadVarInt(rdr);
-    SerTypeArr[iCol] := SerialType;
-    Inc(iCol);
+    if iCol < ATableInfo.ColCount then
+    begin
+      SerTypeArr[iCol] := SerialType;
+      Inc(iCol);
+    end;
   end;
 
   if not Assigned(AList) then
@@ -699,6 +724,7 @@ begin
     end;
   end;
 
+  PageBuf := [];
   SetLength(PageBuf, FPageSize);
   // read pages
   for i := Low(TmpTable.PageNumArr) to High(TmpTable.PageNumArr) do
@@ -816,6 +842,7 @@ begin
   if s <> 'TABLE' then Exit;
 
   s := Trim(ExtractFirstWord(ss, '('));
+  s := RemoveQuotes(s, '''''');
   s := RemoveQuotes(s, '""');
   s := RemoveQuotes(s, '[]');
   TableName := s;
@@ -868,6 +895,7 @@ begin
         // CONSTRAINT pk_name PRIMARY KEY(field_name)
         s := Trim( Copy(sField, Pos('(', sField)+1, MaxInt) );
         s := Trim( Copy(s, 1, Pos(')', s)-1) ); // s = field_name
+        s := RemoveQuotes(s, '''''');
         s := RemoveQuotes(s, '""');
         s := RemoveQuotes(s, '[]');
         for i := 0 to Length(FieldInfoArr) - 1 do
@@ -878,6 +906,7 @@ begin
       end;
       Continue;
     end;
+    s := RemoveQuotes(s, '''''');
     s := RemoveQuotes(s, '""');
     s := RemoveQuotes(s, '[]');
     AddFieldDef(s, Trim(sField));

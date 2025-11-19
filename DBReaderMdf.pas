@@ -18,7 +18,7 @@ https://infostart.ru/1c/articles/709159/
 interface
 
 uses
-  Windows, SysUtils, Classes, Variants, DBReaderBase, DB;
+  SysUtils, Classes, Variants, DBReaderBase, DB;
 
 const
   MDF_PAGE_SIZE = $2000;

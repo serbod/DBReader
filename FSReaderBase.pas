@@ -1,4 +1,5 @@
 unit FSReaderBase;
+
 (*
 Filesytem data reader base classes and defines
 for embedded filesystems, archives and packed data storages

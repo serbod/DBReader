@@ -8,6 +8,10 @@ License: MIT
 
 *)
 
+{$ifdef FPC}
+  {$MODE Delphi}
+{$endif}
+
 interface
 
 uses
@@ -526,7 +530,9 @@ begin
     with FieldDefs.AddFieldDef do
     begin
       DataType := FRowsList.FieldsDef[i].FieldType;
+      {$ifndef FPC}
       FieldNo := i+1;
+      {$endif}
       Name := FRowsList.FieldsDef[i].Name;
       //Size := FRowsList.FieldsDef[i].Size;
     end;

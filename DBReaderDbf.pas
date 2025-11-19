@@ -22,10 +22,18 @@ Memo block:
 
 *)
 
+{$ifdef FPC}
+  {$MODE Delphi}
+{$endif}
+
 interface
 
 uses
+  {$ifdef FPC}
+  LConvEncoding,
+  {$else}
   Windows, {for OemToChar}
+  {$endif}
   SysUtils, Classes, Variants, DBReaderBase, DB;
 
 type
@@ -504,7 +512,13 @@ begin
     System.Move(ARaw[AStart+1], Result[1], ALen);
 
   if (DbfHeader.CodePage in [DBF_CODEPAGE_866, DBF_CODEPAGE_866_2]) and (Result <> '') then
+  begin
+    {$ifndef FPC}
     OemToChar(PChar(Result), PChar(Result));
+    {$else}
+    Result := CP866ToUTF8(Result);
+    {$endif}
+  end;
 end;
 
 procedure TDBReaderDbf.ReadTable(AName: string; ACount: Int64; AList: TDbRowsList);

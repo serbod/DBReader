@@ -1,16 +1,25 @@
 unit MainForm;
 
 (*
-Âatabase browser, main form
+Database browser, main form
 
 Author: Sergey Bodrov, 2024 Minsk
 License: MIT
 *)
 
+{$ifdef FPC}
+  {$MODE Delphi}
+{$endif}
+
 interface
 
 uses
-  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,  Menus,
+  {$ifdef FPC}
+  LCLType,   { for VK_F3 }
+  {$else}
+  Messages,
+  {$endif}
+  SysUtils, Variants, Classes, Graphics, Controls, Forms,  Menus,
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
@@ -111,7 +120,7 @@ var
 
 implementation
 
-{$R *.dfm}
+{$R *.lfm}
 
 { TFormMain }
 
@@ -339,7 +348,8 @@ begin
     dlg.DefaultExt := '.csv';
     dlg.FileName := FTableName + '.csv';
     dlg.Filter := 'CSV|*.csv';
-    if dlg.Execute(Self.Handle) then
+    //if dlg.Execute(Self.Handle) then
+    if dlg.Execute() then
     begin
       sFileName := dlg.FileName;
     end;

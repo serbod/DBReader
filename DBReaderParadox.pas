@@ -13,7 +13,7 @@ http://www.randybeck.com
 interface
 
 uses
-  Windows, SysUtils, Classes, Variants, DB, DBReaderBase;
+  SysUtils, Classes, Variants, DB, DBReaderBase;
 
 type
   TPdxFieldDef = record

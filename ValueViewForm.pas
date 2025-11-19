@@ -1,9 +1,11 @@
 unit ValueViewForm;
 
+{$MODE Delphi}
+
 interface
 
 uses
-  Windows, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
+  LCLIntf, LCLType, LMessages, Messages, SysUtils, Variants, Classes, Graphics, Controls, Forms,
   Dialogs, StdCtrls, ExtCtrls, Grids, Clipbrd, Menus;
 
 type
@@ -53,7 +55,7 @@ var
 
 implementation
 
-{$R *.dfm}
+{$R *.lfm}
 
 function DataAsStr(const AData; ALen: Integer): string;
 var

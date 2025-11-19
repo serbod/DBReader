@@ -24,7 +24,7 @@ FireBird 2.5 (ODS 11.2)
 interface
 
 uses
-  Windows, SysUtils, Classes, Variants, DBReaderBase, DB;
+  SysUtils, Classes, Variants, DBReaderBase, DB;
 
 type
   TDBReaderFB = class;
@@ -162,7 +162,7 @@ type
 
     FOnLog: TGetStrProc;         // (rel=8)
 
-    //function GetRelationName(ARelID: Integer): string;
+    function GetRelationName(ARelID: Integer): string;
 
     function ReadDataPage(const APageBuf: TByteArray; APagePos: Int64;
       ATable: TRDBTable = nil; AList: TDbRowsList = nil): Boolean;
@@ -266,8 +266,8 @@ type
     b_line: Word;               // back line
     flags: Word;                // flags, etc
     format: Byte;               // format version
-    Unused: Byte;
-    tra_high: Word;             // higher bits of transaction id
+    Unused: Byte;
+    tra_high: Word;             // higher bits of transaction id
     f_page: Cardinal;           // next fragment page
     f_line: Word;               // next fragment line
     //Unused2: Byte;
@@ -600,6 +600,7 @@ begin
   if nDataLen = 0 then Exit;
 
   nPos := 1;
+  nLen := 0;
   while nPos <= nDataLen do
   begin
     Move(AData[nPos], nLen, 1);
@@ -649,7 +650,7 @@ begin
   DebugRelID := -1;
   FMaxRecPerPage := 239; // ??
 
-  FBlobRawPageNum := MAXDWORD;
+  FBlobRawPageNum := High(Cardinal); // MAXDWORD
 end;
 
 procedure TDBReaderFB.BeforeDestruction;
@@ -799,7 +800,7 @@ begin
     end;
   end;
   FIsMetadataReaded := True;
-end;
+end;
 
 function TDBReaderFB.FindPageNum(APageType: Word; ARelationID, ASequence: Integer; out APageNum: Cardinal): Boolean;
 var
@@ -879,6 +880,7 @@ begin
     Exit;
   end;
   // read rows list
+  DataPageRecs := [];
   SetLength(DataPageRecs, DataPageHead.Count);
   iOffs := SizeOf(DataPageHead);
   Move(ARawPage[iOffs], DataPageRecs[0], DataPageHead.Count * SizeOf(TFBDataPageRec));
@@ -970,6 +972,7 @@ begin
   if ALineID >= DataPageHead.Count then
     Exit;
   // read rows list
+  DataPageRecs := [];
   SetLength(DataPageRecs, DataPageHead.Count);
   iOffs := SizeOf(DataPageHead);
   Move(FBlobRawPage[iOffs], DataPageRecs[0], DataPageHead.Count * SizeOf(TFBDataPageRec));
@@ -1016,22 +1019,22 @@ begin
   Result := TableList.Count;
 end;
 
-{function TDBReaderFB.GetRelationName(ARelID: Integer): string;
+function TDBReaderFB.GetRelationName(ARelID: Integer): string;
 var
   i: Integer;
-  TmpItem: TRDB_RowItem;
+  TmpItem: TRDBTable;
 begin
-  for i := 0 to FRelationsList.Count - 1 do
+  Result := '';
+  for i := 0 to TableList.Count - 1 do
   begin
-    TmpItem := FRelationsList.GetItem(i);
-    if (TmpItem as TRDB_RelationsItem).RelationID = ARelID then
+    TmpItem := TableList.GetItem(i);
+    if TmpItem.RelationID = ARelID then
     begin
-      Result := (TmpItem as TRDB_RelationsItem).RelationName;
+      Result := TmpItem.TableName;
       Exit;
     end;
   end;
-  Result := '';
-end; }
+end;
 
 procedure TDBReaderFB.InitSystemTables;
 var
@@ -1419,6 +1422,7 @@ var
   TableRowItem: TRDB_RowItem;
 begin
   Result := False;
+  DataPageRecs := [];
   // read data page
   nPage := APagePos div FPageSize;
   Move(APageBuf, DataPageHead, SizeOf(DataPageHead));
@@ -1427,7 +1431,7 @@ begin
 
   if IsLogPages and (DataPageHead.RelationID = DebugRelID) then
   begin
-    //s := GetRelationName(DataPageHead.RelationID);
+    s := GetRelationName(DataPageHead.RelationID);
     LogInfo(Format('=== #%d Seq=%d  Rel=%d (%s) Count=%d ===', [nPage, DataPageHead.Sequence, DataPageHead.RelationID, s, DataPageHead.Count]));
   end;
 

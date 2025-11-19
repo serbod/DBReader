@@ -18,7 +18,7 @@ todo:
 interface
 
 uses
-  Windows, SysUtils, Classes, FSReaderBase, DBReaderBase, DB {for ReadTable};
+  SysUtils, Classes, FSReaderBase, DBReaderBase, DB {for ReadTable};
 
 type
   TPstBlock = class(TObject)
