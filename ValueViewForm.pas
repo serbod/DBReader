@@ -182,6 +182,10 @@ begin
 
   dgHex.ColWidths[0] := 40;
   dgHex.RowCount := (Length(RawData) div 8) + 1;
+  if FieldName <> '' then
+    Caption := FieldName
+  else
+    Caption := 'Raw value';
 
   UpdateView();
   Show();

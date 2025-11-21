@@ -216,21 +216,6 @@ begin
   end;
 end;
 
-// 2-byte data to string
-function WideDataToStr(AData: AnsiString): string;
-var
-  ws: WideString;
-begin
-  if Length(AData) > 1 then
-  begin
-    SetLength(ws, Length(AData) div 2);
-    System.Move(AData[1], ws[1], Length(AData));
-    Result := ws;
-  end
-  else
-    Result := '';
-end;
-
 function GetNullTerminatedText(AData: AnsiString): AnsiString;
 var
   i, iLen: Integer;
@@ -416,7 +401,13 @@ begin
       begin
         APageID := 0;
         ARowID := 0;
-        AData := rdr.ReadBytes(iRecSize);
+        if iRecOffs + iRecSize < FPageSize then
+          AData := rdr.ReadBytes(iRecSize)
+        else
+        begin
+          AData := Format('Blob offs:size=%d:%d > page size=%d', [iRecOffs, iRecSize, FPageSize]);
+          Exit;
+        end;
       end
       else  // type 2 (32bit pointer + data)
       begin
@@ -846,7 +837,12 @@ begin
         if (ATableInfo.FieldInfoArr[i].ColType = MDB_COL_TYPE_TEXT) then
         begin
           if Copy(sData, 1, 2) = #$FF#$FE then  // compressed
-            sData := GetDecompressedText(sData)  // UTF8Decode(sData)
+          begin
+            sData := GetDecompressedText(sData);  // UTF8Decode(sData)
+            {$ifdef FPC}
+            sData := AnsiToUtf8(sData);
+            {$endif}
+          end
           else if FFileInfo.JetVersion > 0 then
             sData := WideDataToStr(sData);
         end;

@@ -359,6 +359,7 @@ begin
   FreeAndNil(FMemoStream);
   SetLength(DbfFields, 0);
   FillChar(DbfHeader, SizeOf(DbfHeader), #0);
+  FillChar(CodePageName, SizeOf(CodePageName), #0);
 
   Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
@@ -456,6 +457,7 @@ begin
     //nNum := Swap(nNum);
   end;
   //nNum := StrToIntDef(ARaw, 0);
+  sData := '';
 
   if nNum > 0 then
   begin
@@ -507,17 +509,31 @@ end;
 
 function TDBReaderDbf.ReadString(const ARaw: AnsiString; AStart, ALen: Word): string;
 begin
+  Result := '';
   SetLength(Result, ALen);
   if ALen > 0 then
     System.Move(ARaw[AStart+1], Result[1], ALen);
 
-  if (DbfHeader.CodePage in [DBF_CODEPAGE_866, DBF_CODEPAGE_866_2]) and (Result <> '') then
-  begin
-    {$ifndef FPC}
-    OemToChar(PChar(Result), PChar(Result));
-    {$else}
-    Result := CP866ToUTF8(Result);
-    {$endif}
+  if Result = '' then
+    Exit;
+
+  case DbfHeader.CodePage of
+    DBF_CODEPAGE_866,
+    DBF_CODEPAGE_866_2:
+    begin
+      {$ifndef FPC}
+      OemToChar(PChar(Result), PChar(Result));
+      {$else}
+      Result := CP866ToUTF8(Result);
+      {$endif}
+    end;
+
+    DBF_CODEPAGE_1251:
+    begin
+      {$ifdef FPC}
+      Result := CP1251ToUTF8(Result);
+      {$endif}
+    end;
   end;
 end;
 
@@ -527,7 +543,6 @@ var
   TmpRow: TDbRowItem;
   s: string;
 begin
-  inherited;
   AList.Clear;
   AList.TableName := AName;
 

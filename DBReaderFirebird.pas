@@ -24,6 +24,9 @@ FireBird 2.5 (ODS 11.2)
 interface
 
 uses
+  {$ifdef FPC}
+  LazUTF8,
+  {$endif}
   SysUtils, Classes, Variants, DBReaderBase, DB;
 
 type
@@ -124,8 +127,8 @@ type
     // AType 0-DateTime 1-Date 2-Time
     function ReadDateTime(AType: Integer = 0; ABytes: Integer = 8): TDateTime;
     function ReadBlob(AType: Integer = 0; ASize: Integer = 0): TRDB_Blob;
-    function ReadVarChar(ACount: Integer; ASize: Integer = 0): string;
-    function ReadChar(ACount: Integer): string;
+    function ReadVarChar(ACount: Integer; ASize: Integer = 0; ASub: Integer = 0): string;
+    function ReadChar(ACount: Integer; ASub: Integer = 0): string;
     function IsNullValue(AIndex: Integer): Boolean;
     function IsBlobValue(AIndex: Integer): Boolean;
   public
@@ -185,6 +188,7 @@ type
   public
     IsLogPages: Boolean;
     IsLogBlobs: Boolean;
+    IsLogFormats: Boolean;
     IsClearRawData: Boolean;
     DebugRelID: Integer;
     procedure AfterConstruction(); override;
@@ -511,7 +515,7 @@ begin
         0: Result := Result + Format(' CHAR(%d)', [ALen]);
         1: Result := Result + '(binary)'; // strings can contain null bytes
         2: Result := Result + '(ASCII)';  // string contains only ASCII characters
-        3: Result := Result + '(unicode)'; // string represents system metadata
+        3: Result := Result + '(UTF-8)';  // string represents system metadata
       else
         // sub = codepage
         Result := Result + Format(' CHAR(%d) CP_%d', [ALen, ASubType]);
@@ -649,6 +653,7 @@ begin
 
   DebugRelID := -1;
   FMaxRecPerPage := 239; // ??
+  IsLogFormats := True;
 
   FBlobRawPageNum := High(Cardinal); // MAXDWORD
 end;
@@ -670,11 +675,19 @@ var
   TmpTable: TRDBTable;
   RecRel, RecRelField, RecField, RecFmt: TDbRowItem;
   nRelID: Integer;
+  ws: WideString;
 begin
-  TabRelations := FTableList.GetByRelationID(SYS_REL_RELATIONS);
-  TabFields := FTableList.GetByRelationID(SYS_REL_FIELDS);
-  TabRelFields := FTableList.GetByRelationID(SYS_REL_RELATION_FIELDS);
-  TabFormats := FTableList.GetByRelationID(SYS_REL_FORMATS);
+  // normalize PageId arrays
+  for i := 0 to TableList.Count - 1 do
+  begin
+    TmpTable := TableList.GetItem(i);
+    SetLength(TmpTable.PageIdArr, TmpTable.PageIdCount);
+  end;
+
+  TabRelations := TableList.GetByRelationID(SYS_REL_RELATIONS);
+  TabFields := TableList.GetByRelationID(SYS_REL_FIELDS);
+  TabRelFields := TableList.GetByRelationID(SYS_REL_RELATION_FIELDS);
+  TabFormats := TableList.GetByRelationID(SYS_REL_FORMATS);
   if not Assigned(TabRelations)
   or not Assigned(TabFields)
   or not Assigned(TabRelFields)
@@ -691,18 +704,21 @@ begin
     RecField := TabFields.FindRecByValue(0, RecRelField.Values[2]);
     if not Assigned(RecField) then
     begin
-      LogInfo('! RecField not found');
+      LogInfo('! FIELDS.FIELD_NAME not found: ' + RecRelField.Values[2]);
       Continue;
     end;
 
     // find  RecRel[8]RELATION_NAME by RecRelField[1]RELATION_NAME
     // same RELATION_NAME?
-    if (not Assigned(RecRel)) or (RecRel.Values[8] <> RecRelField.Values[1]) then
+    ws := RecRelField.Values[1];
+    if ws = '' then
+      ws := RecRelField.Values[2];  // FIELD_SOURCE
+    if (not Assigned(RecRel)) or (RecRel.Values[8] <> ws) then
     begin
-      RecRel := TabRelations.FindRecByValue(8, RecRelField.Values[1]);
+      RecRel := TabRelations.FindRecByValue(8, ws);
       if not Assigned(RecRel) then
       begin
-        LogInfo('! RecRel not found');
+        LogInfo('! RELATIONS.RELATION_NAME not found: ' + ws);
         Continue;
       end;
     end;
@@ -710,7 +726,7 @@ begin
     nRelID := RecRel.Values[3]; // RELATION_ID
     if (not Assigned(TmpTable) or (TmpTable.RelationID <> nRelID)) then
     begin
-      TmpTable := FTableList.GetByRelationID(nRelID);
+      TmpTable := TableList.GetByRelationID(nRelID);
       if not Assigned(TmpTable) then
       begin
         //LogInfo('! TmpTable not found');
@@ -718,17 +734,16 @@ begin
         // empty table
         TmpTable := TRDBTable.Create();
         TmpTable.RelationID := nRelID;
-        FTableList.Add(TmpTable);
+        TableList.Add(TmpTable);
       end;
       TmpTable.TableName := RecRel.Values[8]; // [8]RELATION_NAME
       TmpTable.FormatID := RecRel.Values[6]; // [6]FORMAT
     end;
 
     // set field definitions
-    if IsInterBase then
-      FieldID := RecRelField.Values[6]  // [6]FIELD_POSITION
-    else // Firebird
-      FieldID := RecRelField.Values[9]; // [9]FIELD_ID
+    FieldID := RecRelField.Values[9]; // [9]FIELD_ID
+    //if IsInterBase then
+    //  FieldID := RecRelField.Values[6]; // [6]FIELD_POSITION
     if Length(TmpTable.FieldsInfo) < FieldID+1 then
       SetLength(TmpTable.FieldsInfo, FieldID+1);
     TmpTable.FieldsInfo[FieldID].Name         := RecRelField.Values[0];  // FIELD_NAME
@@ -750,7 +765,7 @@ begin
   begin
     RecFmt := TabFormats.GetItem(i);
     nRelID := RecFmt.Values[0];  // [0]RELATION_ID
-    TmpTable := FTableList.GetByRelationID(nRelID);
+    TmpTable := TableList.GetByRelationID(nRelID);
     if not Assigned(TmpTable) then
       Continue;
     // format blobs data can not be retrieved at OpenFile(), try to get value as blob
@@ -761,9 +776,9 @@ begin
 
 
   // update dataset fields
-  for i := 0 to FTableList.Count - 1 do
+  for i := 0 to TableList.Count - 1 do
   begin
-    TmpTable := FTableList.GetItem(i);
+    TmpTable := TableList.GetItem(i);
     if TmpTable.PageIdCount = 0 then
       TmpTable.RowCount := 0;
     if Length(TmpTable.FieldsDef) > 0 then
@@ -791,6 +806,8 @@ begin
       TmpTable.FieldsDef[ii].Size := TmpTable.FieldsInfo[ii].FieldLength;
       if TmpTable.FieldsDef[ii].Size = 0 then
         TmpTable.FieldsDef[ii].Size := nSize;
+      if TmpTable.FieldsDef[ii].Size = 0 then
+        TmpTable.FieldsDef[ii].Size := TmpTable.FieldsInfo[ii].GetSize();
 
       TmpTable.FieldsDef[ii].RawOffset := TmpTable.FieldsInfo[ii].Offset;
       if TmpTable.FieldsDef[ii].RawOffset = 0 then
@@ -1041,7 +1058,7 @@ var
   TmpTab: TRDBTable;
 begin
   TmpTab := TRDBTable.Create();
-  FTableList.Add(TmpTab);
+  TableList.Add(TmpTab);
   with TmpTab do
   begin
     RelationID := SYS_REL_PAGES;
@@ -1054,7 +1071,7 @@ begin
   end;
 
   TmpTab := TRDBTable.Create();
-  FTableList.Add(TmpTab);
+  TableList.Add(TmpTab);
   with TmpTab do
   begin
     RelationID := SYS_REL_FIELDS;
@@ -1117,27 +1134,33 @@ begin
   end;
 
   TmpTab := TRDBTable.Create();
-  FTableList.Add(TmpTab);
+  TableList.Add(TmpTab);
   with TmpTab do
   begin
     RelationID := SYS_REL_RELATION_FIELDS;
     TableName := 'RDB$RELATION_FIELDS';
-    AddFieldDef('FIELD_NAME', DTYPE_CSTRING, 31, 0);     // CHAR(31)
-    AddFieldDef('RELATION_NAME', DTYPE_CSTRING, 31, 0);  // CHAR(31)
-    AddFieldDef('FIELD_SOURCE', DTYPE_CSTRING, 31, 0);   // CHAR(31)
-    AddFieldDef('QUERY_NAME', DTYPE_CSTRING, 31, 0);     // CHAR(31)
     if IsInterBase and (OdsVersion = 11) then
     begin
-      AddFieldDef('BASE_FIELD', DTYPE_CSTRING, 63, 0);     // CHAR(63)
-      AddFieldDef('EDIT_STRING', DTYPE_VARYNG, 127, 0);    // VARCHAR(125) + 4
+      AddFieldDef('FIELD_NAME', DTYPE_CSTRING, 67, 0);     // CHAR(67)UTF8
+      AddFieldDef('RELATION_NAME', DTYPE_CSTRING, 67, 0);  // CHAR(67)UTF8
+      AddFieldDef('FIELD_SOURCE', DTYPE_CSTRING, 67, 0);   // CHAR(67)UTF8
+      AddFieldDef('QUERY_NAME', DTYPE_CSTRING, 67, 0);     // CHAR(67)UTF8
+      AddFieldDef('BASE_FIELD', DTYPE_CSTRING, 67, 0);     // CHAR(67)UTF8
     end
     else // FireBird
     begin
+      AddFieldDef('FIELD_NAME', DTYPE_CSTRING, 31, 0);     // CHAR(31)
+      AddFieldDef('RELATION_NAME', DTYPE_CSTRING, 31, 0);  // CHAR(31)
+      AddFieldDef('FIELD_SOURCE', DTYPE_CSTRING, 31, 0);   // CHAR(31)
+      AddFieldDef('QUERY_NAME', DTYPE_CSTRING, 31, 0);     // CHAR(31)
       AddFieldDef('BASE_FIELD', DTYPE_CSTRING, 31, 0);     // CHAR(31)
-      AddFieldDef('EDIT_STRING', DTYPE_VARYNG, 127, 0);    // VARCHAR(125) + 4
     end;
+    AddFieldDef('EDIT_STRING', DTYPE_VARYNG, 127, 0);    // VARCHAR(125) + 4
     AddFieldDef('FIELD_POSITION', DTYPE_SHORT, 2, 0);    // SMALLINT
-    AddFieldDef('QUERY_HEADER', DTYPE_TEXT, 14, 1);      // BLOB_TEXT
+    if IsInterBase and (OdsVersion = 11) then
+      AddFieldDef('QUERY_HEADER', DTYPE_TEXT, 10, 1)        // BLOB_TEXT
+    else
+      AddFieldDef('QUERY_HEADER', DTYPE_TEXT, 14, 1);      // BLOB_TEXT
     AddFieldDef('UPDATE_FLAG', DTYPE_SHORT, 2, 0);       // SMALLINT
     AddFieldDef('FIELD_ID', DTYPE_SHORT, 2, 0);          // SMALLINT     (unique for RelationName)
     AddFieldDef('VIEW_CONTEXT', DTYPE_SHORT, 2, 0);      // SMALLINT
@@ -1152,7 +1175,7 @@ begin
   end;
 
   TmpTab := TRDBTable.Create();
-  FTableList.Add(TmpTab);
+  TableList.Add(TmpTab);
   with TmpTab do
   begin
     RelationID := SYS_REL_RELATIONS;
@@ -1189,7 +1212,7 @@ begin
   end;
 
   TmpTab := TRDBTable.Create();
-  FTableList.Add(TmpTab);
+  TableList.Add(TmpTab);
   with TmpTab do
   begin
     RelationID := SYS_REL_FORMATS;
@@ -1287,7 +1310,7 @@ begin
   Result := inherited OpenFile(AFileName, AStream);
   if not Result then Exit;
   FPagesList.Clear();
-  FTableList.Clear();
+  TableList.Clear();
 
   // read header page
   FFile.Read(OdsHeader, SizeOf(OdsHeader));
@@ -1401,7 +1424,7 @@ begin
 
   end;
   FillTablesList();
-  FTableList.SortByName();
+  TableList.SortByName();
 end;
 
 function TDBReaderFB.ReadDataPage(const APageBuf: TByteArray; APagePos: Int64; ATable: TRDBTable;
@@ -1449,13 +1472,13 @@ begin
       FPagesList.Insert(-iPageIndex-1, TmpPageItem);
     end;
 
-    TmpTable := FTableList.GetByRelationID(DataPageHead.RelationID);
+    TmpTable := TableList.GetByRelationID(DataPageHead.RelationID);
     if not Assigned(TmpTable) then
     begin
       TmpTable := TRDBTable.Create();
       TmpTable.RelationID := DataPageHead.RelationID;
       TmpTable.TableName := Format('RelationID=%d', [TmpTable.RelationID]);
-      FTableList.Add(TmpTable);
+      TableList.Add(TmpTable);
     end;
     // store PageNum
     Inc(TmpTable.PageIdCount);
@@ -1687,35 +1710,31 @@ var
   nPos: Int64;
   RawPage: TByteArray;
   TmpTable: TRDBTable;
+  TmpRow: TDbRowItem;
 begin
   if not Assigned(AList) then Exit;
   AList.Clear();
 
-  TmpTable := FTableList.GetByName(AName);
+  TmpTable := TableList.GetByName(AName);
   if not Assigned(TmpTable) then Exit;
 
   // Show table info
   LogInfo(Format('== TableName=%s  RelationID=%d', [TmpTable.TableName, TmpTable.RelationID]));
   AList.TableName := TmpTable.TableName;
-  SetLength(AList.FieldsDef, Length(TmpTable.FieldsInfo));
-  for i := Low(TmpTable.FieldsInfo) to High(TmpTable.FieldsInfo) do
-  begin
-    AList.FieldsDef[i] := TmpTable.FieldsDef[i];
-    {
-    AList.FieldsDef[i].Name := TmpTable.FieldsInfo[i].Name;
-    AList.FieldsDef[i].TypeName :=  TmpTable.FieldsInfo[i].AsString;
-    AList.FieldsDef[i].FieldType := FieldTypeToDbFieldType(TmpTable.FieldsInfo[i].FieldType, 0, TmpTable.FieldsInfo[i].FieldSubType);
-    AList.FieldsDef[i].Size := TmpTable.FieldsInfo[i].Length;
-    AList.FieldsDef[i].RawOffset := TmpTable.FieldsInfo[i].Offset;   }
-    {LogInfo(Format('%.2d FieldName=%s  Size=%d  Type=%s  Len=%d  SubType=%d',
-      [i,
-       RelItem._FieldsInfo[i].Name,
-       RelItem._FieldsInfo[i].Size,
-       FieldTypeToStr(RelItem._FieldsInfo[i].FieldType, RelItem._FieldsInfo[i].FieldLength, RelItem._FieldsInfo[i].FieldSubType),
-       RelItem._FieldsInfo[i].FieldLength,
-       RelItem._FieldsInfo[i].FieldSubType]));  }
-  end;
+  AList.FieldsDef := TmpTable.FieldsDef;
   //LogInfo('==');
+
+  if (not FIsMetadataReaded) and (TmpTable.Count > 0) then
+  begin
+    // predefined table
+    for i := 0 to TmpTable.Count-1 do
+    begin
+      TmpRow := TDbRowItem.Create(AList);
+      TmpRow.Assign(TmpTable.GetItem(i));
+      AList.Add(TmpRow);
+    end;
+    Exit;
+  end;
 
   if ACount = 0 then
     Exit;
@@ -1758,7 +1777,7 @@ end;
 
 procedure TDBReaderFB.SetRawFormat(ATable: TRDBTable; ARawFormat: AnsiString);
 var
-  i, nPre, iPos, iRecSize: Integer;
+  i, nPre, iPos, iRecSize, n: Integer;
   //FormatRec: TFBFormatRec;
   rdr: TRawDataReader;
 begin
@@ -1766,7 +1785,6 @@ begin
   iRecSize := 12;  // SizeOf(TFBFormatRec)
   if IsInterBase and (OdsVersion = 11) then
   begin
-    nPre := 0;
     iRecSize := 16;
   end
   else
@@ -1776,10 +1794,12 @@ begin
   if OdsVersion = 12 then
     nPre := 4;
 
-  if ATable.RelationID = DebugRelID then
+  if IsLogFormats then
   begin
     //StrToFile(ARawFormat, 'RelID_160_format.data');
     LogInfo(Format('RelID_%d_format=%s', [ATable.RelationID, BufferToHex(ARawFormat[1], Length(ARawFormat))]));
+    n := (Length(ARawFormat) - nPre) div iRecSize;
+    LogInfo(Format('Rec count (Size div RecSize)=%d', [n]));
   end;
   if (Copy(ARawFormat, 1, 1) = '<') and (Copy(ARawFormat, Length(ARawFormat), 1) = '>') then
   begin
@@ -1807,14 +1827,14 @@ begin
     //
     if IsInterBase and (OdsVersion = 11) then
     begin
-      rdr.ReadUInt16;
-      rdr.ReadUInt8;
-      ATable.FieldsInfo[i].DType := rdr.ReadUInt8;
+      n := rdr.ReadUInt8; // unknown, 0
+      ATable.FieldsInfo[i].DType := rdr.ReadUInt8;    // can not be same as field
       ATable.FieldsInfo[i].Scale := rdr.ReadInt16;
-      ATable.FieldsInfo[i].Length := rdr.ReadUInt16;
+      ATable.FieldsInfo[i].Length := rdr.ReadUInt16;  // can not be same as field
       ATable.FieldsInfo[i].SubType := rdr.ReadUInt16;
       ATable.FieldsInfo[i].Flags := rdr.ReadUInt32;
-      ATable.FieldsInfo[i].Offset := rdr.ReadUInt16;
+      ATable.FieldsInfo[i].Offset := rdr.ReadUInt16;  // ok
+      n := rdr.ReadUInt16; // unknown, 0
     end
     else // FireBird
     begin
@@ -1837,10 +1857,10 @@ begin
     //ATable.FieldsInfo[i].FieldSubType := FormatRec.SubType;
     //ATable.FieldsInfo[i].FieldLength := FormatRec.Length;
 
-    if ATable.RelationID = DebugRelID then
+    if IsLogFormats then
     begin
       LogInfo(SysUtils.Format('FORMAT raw=%s  DType=%d(%d) Scale=%d Len=%d(%d) SubType=%d(%d) Flags=%d Offs=%d',
-        [BufferToHex(ARawFormat[iPos+1], SizeOf(TFBFormatRec)),
+        [BufferToHex(ARawFormat[iPos+1], iRecSize),
         ATable.FieldsInfo[i].DType, ATable.FieldsInfo[i].FieldType,
         ATable.FieldsInfo[i].Scale,
         ATable.FieldsInfo[i].Length, ATable.FieldsInfo[i].FieldLength,
@@ -2085,7 +2105,7 @@ begin
   Inc(FDataPos, nMaxLen);
 end;
 
-function TRDB_RowItem.ReadChar(ACount: Integer): string;
+function TRDB_RowItem.ReadChar(ACount: Integer; ASub: Integer = 0): string;
 var
   nPos: Integer;
 begin
@@ -2100,6 +2120,10 @@ begin
   end;
   if nPos > FDataPos then
     Result := Trim(Copy(RawData, FDataPos, nPos-FDataPos));
+  {$ifdef FPC}
+  if ASub <> 3 then
+    Result := WinCPToUTF8(Result);
+  {$endif}
 
   Inc(FDataPos, ACount);
 end;
@@ -2164,7 +2188,7 @@ begin
         8: Values[i] := ReadInt(4); // INTEGER
         //8: Values[i] := ReadInt64(); // INTEGER
         10: Values[i] := ReadFloat(); // FLOAT
-        14: Values[i] := ReadChar(nLen); // CHAR
+        14: Values[i] := ReadChar(nLen, nSub); // CHAR
         16:
         begin
           if nSub = 1 then
@@ -2174,7 +2198,7 @@ begin
         end;
         27: Values[i] := ReadFloat(); // DOUBLE
         35: Values[i] := ReadDateTime(0, nSize); // DATETIME
-        37: Values[i] := ReadVarChar(nLen, nSize); // VARCHAR
+        37: Values[i] := ReadVarChar(nLen, nSize, nSub); // VARCHAR
         261:
         begin
           BlobRec := ReadBlob(nSub, nLen); // BLOB
@@ -2201,19 +2225,25 @@ begin
         begin
           // encoding?
           if (nSub = 0) or (nSub = 3) then
-            Values[i] := ReadChar(nLen)
+            Values[i] := ReadChar(nLen, nSub)
           else
           begin
             BlobRec := ReadBlob(nSub);
             if (BlobRec.Data <> '') and (BlobRec.BlobSubType <> -1) then
-              Values[i] := BlobRec.Data
+            begin
+              {$ifdef FPC}
+              Values[i] := WinCPToUTF8(BlobRec.Data);
+              {$else}
+              Values[i] := BlobRec.Data;
+              {$endif}
+            end
             else
             if (BlobRec.RelID <> 0) then
               Values[i] := BlobRec.RowID;
           end;
         end;
-        DTYPE_CSTRING:   Values[i] := ReadChar(nLen);
-        DTYPE_VARYNG:    Values[i] := ReadVarChar(nLen);
+        DTYPE_CSTRING:   Values[i] := ReadChar(nLen, nSub);
+        DTYPE_VARYNG:    Values[i] := ReadVarChar(nLen, 0, nSub);
         //DTYPE_PACKED:    = 6;
         DTYPE_BYTE:      Values[i] := ReadInt(1);  // 1  Byte
         DTYPE_SHORT:     Values[i] := ReadInt(2);  // 2  Word
@@ -2233,13 +2263,29 @@ begin
             if Reader.IsInterBase then
             begin
               case nSub of
-                1: Values[i] := Copy(BlobRec.Data, 3, MaxInt); // TEXT  skip first 2 bytes
+                1:
+                begin
+                  {$ifdef FPC}
+                  Values[i] := WinCPToUTF8(Copy(BlobRec.Data, 3, MaxInt)); // TEXT  skip first 2 bytes
+                  {$else}
+                  Values[i] := Copy(BlobRec.Data, 3, MaxInt); // TEXT  skip first 2 bytes
+                  {$endif}
+                end;
               else
                 Values[i] := BlobRec.Data
               end;
             end
             else
-              Values[i] := BlobRec.Data
+            begin
+              {$ifdef FPC}
+              if nSub = 1 then // TEXT
+                Values[i] := WinCPToUTF8(BlobRec.Data)
+              else
+                Values[i] := BlobRec.Data;
+              {$else}
+              Values[i] := BlobRec.Data;
+              {$endif}
+            end;
           end
           else
           if (BlobRec.RelID <> 0) then
@@ -2377,7 +2423,8 @@ begin
   end;
 end;  }
 
-function TRDB_RowItem.ReadVarChar(ACount: Integer; ASize: Integer = 0): string;
+function TRDB_RowItem.ReadVarChar(ACount: Integer; ASize: Integer = 0;
+  ASub: Integer = 0): string;
 var
   nPos: Integer;
   nLen: Word;
@@ -2385,7 +2432,7 @@ begin
   Result := '';
   if ASize = 0 then
   begin
-    ASize := ACount + 2 + 4;  // 2 bytes lenght
+    ASize := ACount + 2 + 4;  // 2 bytes length
     // align
     nPos := FDataPos + ASize;
     nPos := nPos + ((nPos-1) mod 2);
@@ -2407,6 +2454,10 @@ begin
 
   if (nPos + nLen <= Length(RawData)) then
     Result := Copy(RawData, nPos, nLen);
+  {$ifdef FPC}
+  if ASub <> 3 then
+    Result := WinCPToUTF8(Result);
+  {$endif}
 
   Inc(FDataPos, ASize);
 end;
@@ -2446,6 +2497,13 @@ begin
   FieldsInfo[i].Offset := AOffset;
   // next offser
   DataPos := AOffset + FieldsInfo[i].GetSize();
+
+  SetLength(FieldsDef, i+1);
+  FieldsDef[i].Name := AName;
+  FieldsDef[i].FieldType := ftString; // just to show value
+  FieldsDef[i].RawOffset := AOffset;
+  FieldsDef[i].Size := FieldsInfo[i].GetSize();
+  FieldsDef[i].TypeName := DataTypeToStr(AType, ALength, ASubType);
 end;
 
 procedure TRDBTable.AfterConstruction;
@@ -2463,11 +2521,14 @@ end;
 function TRDBTable.FindRecByValue(AColIndex: Integer; AValue: Variant): TDbRowItem;
 var
   i: Integer;
+  ws1, ws2: WideString;
 begin
+  ws2 := Trim(AValue);
   for i := 0 to Count - 1 do
   begin
     Result := GetItem(i);
-    if Result.Values[AColIndex] = AValue then
+    ws1 := Trim(Result.Values[AColIndex]);
+    if WideSameText(ws1, ws2) then
       Exit;
   end;
   Result := nil;
@@ -2528,16 +2589,18 @@ begin
     TRDBTable(Ptr).Free;
 end;
 
-procedure TRDBTableList.SortByName;
-  function DoSortByName(Item1, Item2: Pointer): Integer;
-  var
-    TmpItem1, TmpItem2: TRDBTable;
-  begin
-    TmpItem1 := TRDBTable(Item1);
-    TmpItem2 := TRDBTable(Item2);
-    Result := AnsiCompareStr(TmpItem1.TableName, TmpItem2.TableName);
-  end;
+function DoSortByName(Item1, Item2: Pointer): Integer;
+var
+  TmpItem1, TmpItem2: TRDBTable;
+begin
+  TmpItem1 := TRDBTable(Item1);
+  TmpItem2 := TRDBTable(Item2);
+  Result := AnsiCompareStr(TmpItem1.TableName, TmpItem2.TableName);
+end;
 
+procedure TRDBTableList.SortByName;
+  // Warning! Nested sort function receive bad pointers!
+  //function DoSortByName(Item1, Item2: Pointer): Integer;
 begin
   Sort(@DoSortByName);
 end;
