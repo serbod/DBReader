@@ -20,7 +20,9 @@ uses
   DBReaderEdb in 'DBReaderEdb.pas',
   DBReaderInno in 'DBReaderInno.pas',
   DBReaderSqlite in 'DBReaderSqlite.pas',
-  DBReaderSybase in 'DBReaderSybase.pas', Interfaces;
+  DBReaderSybase in 'DBReaderSybase.pas',
+  DBReaderDbisam,
+  Interfaces;
 
 //{$R *.res}
 

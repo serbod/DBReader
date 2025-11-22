@@ -23,7 +23,7 @@ uses
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
-  DBReaderSqlite, DBReaderSybase,
+  DBReaderSqlite, DBReaderSybase, DBReaderDbisam,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -97,10 +97,7 @@ type
     procedure FindNextCell();
 
     procedure OpenBDB(AFileName: string);  // BerkleyDB (not tested)
-    procedure OpenCDS(AFileName: string);
-    procedure OpenParadox(AFileName: string);
     procedure OpenGsr(AFileName: string);
-    procedure OpenDbf(AFileName: string);
     procedure OpenTape(AFileName: string);
     procedure OpenMdf(AFileName: string; AStream: TStream = nil);
     procedure OpenPst(AFileName: string);
@@ -625,23 +622,6 @@ begin
   memoLog.Lines.EndUpdate();
 end;
 
-procedure TFormMain.OpenCDS(AFileName: string);
-begin
-  FDBReader := TDBReaderMidas.Create(Self);
-  InitReader(FDBReader);
-  try
-    FDBReader.OpenFile(AFileName);
-  except
-    on E: Exception do
-      memoInfo.Lines.Append(E.Message);
-  end;
-
-  ShowTable(ExtractFileName(AFileName));
-
-  // show other files from same path
-  FillTreeByFiles(AFileName);
-end;
-
 procedure TFormMain.OpenDB(AFileName: string);
 var
   sExt: string;
@@ -669,16 +649,16 @@ begin
       OpenDatabase(FDbFileName, TDBReaderFB)
     else
     if (sExt = '.cds') then
-      OpenCDS(FDbFileName)
+      OpenDatabase(FDbFileName, TDBReaderMidas)
     else
     if (sExt = '.db') then
-      OpenParadox(FDbFileName)
+      OpenDatabase(FDbFileName, TDBReaderParadox)
     else
     if (sExt = '.gsr') then
       OpenGsr(FDbFileName)
     else
     if (sExt = '.dbf') then
-      OpenDbf(FDbFileName)
+      OpenDatabase(FDbFileName, TDBReaderDbf)
     else
     if (sExt = '.bak') then
       OpenTape(FDbFileName)
@@ -702,7 +682,10 @@ begin
       OpenDatabase(FDbFileName, TDBReaderSqlite)
     else
     if (sExt = '.dbs') then
-      OpenDatabase(FDbFileName, TDBReaderSybase);
+      OpenDatabase(FDbFileName, TDBReaderSybase)
+    else
+    if (sExt = '.dat') then
+      OpenDatabase(FDbFileName, TDBReaderDbisam);
 
   finally
     memoLog.Lines.EndUpdate();
@@ -721,24 +704,15 @@ begin
       memoInfo.Lines.Append(E.Message);
   end;
 
-  FillTree();
-end;
+  if FDBReader.IsSingleTable then
+  begin
+    ShowTable(AFileName);
 
-procedure TFormMain.OpenDbf(AFileName: string);
-begin
-  FDBReader := TDBReaderDbf.Create(Self);
-  InitReader(FDBReader);
-  try
-    FDBReader.OpenFile(AFileName);
-  except
-    on E: Exception do
-      memoInfo.Lines.Append(E.Message);
-  end;
-
-  ShowTable((FDBReader as TDBReaderDbf).TableName);
-
-  // show other files from same path
-  FillTreeByFiles(AFileName);
+    // show other files from same path
+    FillTreeByFiles(AFileName);
+  end
+  else
+    FillTree();
 end;
 
 procedure TFormMain.OpenGsr(AFileName: string);
@@ -794,16 +768,6 @@ begin
   end;
 
   FillTree();
-end;
-
-procedure TFormMain.OpenParadox(AFileName: string);
-begin
-  FDBReader := TDBReaderParadox.Create(Self);
-  InitReader(FDBReader);
-  FDBReader.OpenFile(AFileName);
-
-  tvMain.Items.Clear();
-  ShowTable((FDBReader as TDBReaderParadox).TableName);
 end;
 
 procedure TFormMain.OpenPst(AFileName: string);
