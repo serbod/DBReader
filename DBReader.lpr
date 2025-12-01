@@ -22,6 +22,7 @@ uses
   DBReaderSqlite in 'DBReaderSqlite.pas',
   DBReaderSybase in 'DBReaderSybase.pas',
   DBReaderDbisam,
+  DBReaderTps,
   Interfaces;
 
 //{$R *.res}

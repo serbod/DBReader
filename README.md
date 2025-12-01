@@ -15,7 +15,8 @@ Supported databases:
 * MySQL InnoDB (.IBD)
 * SQLite (.DB3, .SQLITE)
 * Sybase SQL Anywhere (.DB)
-* DBISAM (.dat)
+* ElevateDB/DBISAM (.DAT)
+* Clarion/TopSpeed (.TPS)
 
 Sample projects:
 * Database browser - browse tables and inspect values

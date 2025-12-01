@@ -141,6 +141,8 @@ type
     procedure AssignRowsList(ARowsList: TDbRowsList);
   end;
 
+  { TRawDataReader }
+
   TRawDataReader = record
     Data: AnsiString;
     nPos: Integer;
@@ -166,6 +168,7 @@ type
     function ReadSingle: Single;
     function ReadDouble: Double;
     function ReadBytes(ASize: Integer): AnsiString;
+    function ReadCString(AMaxSize: Integer): AnsiString; // zero-terminated string
     procedure ReadToBuffer(var ABuf; ASize: Integer);
   end;
 
@@ -710,6 +713,19 @@ begin
     SetLength(Result, ASize);
     Move(DataPtr^, Result[1], ASize);
     Inc(DataPtr, ASize);
+  end;
+end;
+
+function TRawDataReader.ReadCString(AMaxSize: Integer): AnsiString;
+var
+  bt: Byte;
+begin
+  Result := '';
+  bt := ReadUInt8;
+  while (bt <> 0) and (Length(Result) < AMaxSize) do
+  begin
+    Result := Result + Chr(bt);
+    bt := ReadUInt8;
   end;
 end;
 

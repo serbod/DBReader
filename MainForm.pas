@@ -23,7 +23,7 @@ uses
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
-  DBReaderSqlite, DBReaderSybase, DBReaderDbisam,
+  DBReaderSqlite, DBReaderSybase, DBReaderDbisam, DBReaderTps,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -685,7 +685,10 @@ begin
       OpenDatabase(FDbFileName, TDBReaderSybase)
     else
     if (sExt = '.dat') then
-      OpenDatabase(FDbFileName, TDBReaderDbisam);
+      OpenDatabase(FDbFileName, TDBReaderDbisam)
+    else
+    if (sExt = '.tps') then
+      OpenDatabase(FDbFileName, TDBReaderTps);
 
   finally
     memoLog.Lines.EndUpdate();
