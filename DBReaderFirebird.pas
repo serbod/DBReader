@@ -217,8 +217,6 @@ type
   end;
 
 
-function RleDecompress(AData: AnsiString; APadding: Boolean = True): AnsiString;
-
 implementation
 
 type

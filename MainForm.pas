@@ -23,7 +23,7 @@ uses
   Dialogs, StdCtrls, ComCtrls, ExtCtrls, Grids, ValueViewForm, DB, RFUtils,
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
-  DBReaderSqlite, DBReaderSybase, DBReaderDbisam, DBReaderTps,
+  DBReaderSqlite, DBReaderSybase, DBReaderDbisam, DBReaderTps, DBReaderRaima,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -109,7 +109,6 @@ type
     { Public declarations }
     MaxRows: Integer;
     procedure OpenDB(AFileName: string);
-    procedure Test();
   end;
 
 var
@@ -688,7 +687,10 @@ begin
       OpenDatabase(FDbFileName, TDBReaderDbisam)
     else
     if (sExt = '.tps') then
-      OpenDatabase(FDbFileName, TDBReaderTps);
+      OpenDatabase(FDbFileName, TDBReaderTps)
+    else
+    if (sExt = '.dbd') then
+      OpenDatabase(FDbFileName, TDBReaderRaima);
 
   finally
     memoLog.Lines.EndUpdate();
@@ -974,15 +976,6 @@ begin
   else
     dgItems.FixedRows := 0;
   dgItems.Invalidate();
-end;
-
-procedure TFormMain.Test;
-var
-  s1, s2: AnsiString;
-begin
-  s1 := #2 + 'ab' + #254 + 'c' + #3 +'def';
-  s2 := RleDecompress(s1);
-  OnLogHandler(s2);
 end;
 
 procedure TFormMain.TestDbGrid;

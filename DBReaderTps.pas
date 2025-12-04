@@ -262,6 +262,7 @@ end;
 
 procedure TDBReaderTps.BeforeDestruction;
 begin
+  FreeAndNil(FTableInfo);
   FreeAndNil(FPagesList);
   inherited;
 end;
@@ -708,16 +709,19 @@ begin
       TPS_FIELD_TYPE_STRING:
       begin
         s := rdr.ReadBytes(iFieldSize);
+        s := WinCPToUTF8(s);
         v := s;
       end;
       TPS_FIELD_TYPE_CSTRING:
       begin
         s := rdr.ReadCString(iFieldSize);
+        s := WinCPToUTF8(s);
         v := s;
       end;
       TPS_FIELD_TYPE_PSTRING:
       begin
         s := rdr.ReadCString(iFieldSize);
+        s := WinCPToUTF8(s);
         v := s;
       end;
       TPS_FIELD_TYPE_GROUP:
@@ -760,14 +764,14 @@ begin
     case FieldRec.FieldType of
       TPS_FIELD_TYPE_DECIMAL:
       begin
-        FieldRec.Sub := rdr.ReadUInt8;
-        FieldRec.Sub2 := rdr.ReadUInt8;
+        FieldRec.Sub := rdr.ReadUInt8;  // precision
+        FieldRec.Sub2 := rdr.ReadUInt8; // size
       end;
       TPS_FIELD_TYPE_STRING,
       TPS_FIELD_TYPE_CSTRING,
       TPS_FIELD_TYPE_PSTRING:
       begin
-        FieldRec.Sub := rdr.ReadUInt16;
+        FieldRec.Sub := rdr.ReadUInt16;   // array item size
         FieldRec.Template := rdr.ReadCString(32);
         if FieldRec.Template = '' then
           FieldRec.Sub2 := rdr.ReadUInt8;

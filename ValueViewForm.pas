@@ -148,6 +148,7 @@ begin
   Rect.Left := Rect.Left + 2;
   Rect.Right := Rect.Right - 2;
   {$ifdef FPC}
+  ts := c.TextStyle;
   c.TextRect(Rect, Rect.Left, Rect.Top, s, ts);
   {$else}
   c.TextRect(Rect, s, tf);

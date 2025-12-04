@@ -17,6 +17,7 @@ Supported databases:
 * Sybase SQL Anywhere (.DB)
 * ElevateDB/DBISAM (.DAT)
 * Clarion/TopSpeed (.TPS)
+* RaimaDB/db_VISTA/Velocis/RDM (.DBD)
 
 Sample projects:
 * Database browser - browse tables and inspect values

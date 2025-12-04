@@ -1234,17 +1234,16 @@ begin
     TSybaseTableInfo(Ptr).Free;
 end;
 
+function _DoSortByName(Item1, Item2: Pointer): Integer;
+var
+  TmpItem1, TmpItem2: TSybaseTableInfo;
+begin
+  TmpItem1 := TSybaseTableInfo(Item1);
+  TmpItem2 := TSybaseTableInfo(Item2);
+  Result := AnsiCompareStr(TmpItem1.TableName, TmpItem2.TableName);
+end;
+
 procedure TSybaseTableInfoList.SortByName;
-
-  function _DoSortByName(Item1, Item2: Pointer): Integer;
-  var
-    TmpItem1, TmpItem2: TSybaseTableInfo;
-  begin
-    TmpItem1 := TSybaseTableInfo(Item1);
-    TmpItem2 := TSybaseTableInfo(Item2);
-    Result := AnsiCompareStr(TmpItem1.TableName, TmpItem2.TableName);
-  end;
-
 begin
   Sort(@_DoSortByName);
 end;
