@@ -24,6 +24,7 @@ uses
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
   DBReaderSqlite, DBReaderSybase, DBReaderDbisam, DBReaderTps, DBReaderRaima,
+  DBReaderClarion,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -684,7 +685,8 @@ begin
       OpenDatabase(FDbFileName, TDBReaderSybase)
     else
     if (sExt = '.dat') then
-      OpenDatabase(FDbFileName, TDBReaderDbisam)
+      //OpenDatabase(FDbFileName, TDBReaderDbisam)
+      OpenDatabase(FDbFileName, TDBReaderClarion)
     else
     if (sExt = '.tps') then
       OpenDatabase(FDbFileName, TDBReaderTps)

@@ -16,7 +16,7 @@ Supported databases:
 * SQLite (.DB3, .SQLITE)
 * Sybase SQL Anywhere (.DB)
 * ElevateDB/DBISAM (.DAT)
-* Clarion/TopSpeed (.TPS)
+* Clarion/TopSpeed (.TPS, .DAT)
 * RaimaDB/db_VISTA/Velocis/RDM (.DBD)
 
 Sample projects:

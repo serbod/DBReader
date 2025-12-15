@@ -168,7 +168,10 @@ type
     function ReadSingle: Single;
     function ReadDouble: Double;
     function ReadBytes(ASize: Integer): AnsiString;
-    function ReadCString(AMaxSize: Integer): AnsiString; // zero-terminated string
+    // zero-terminated string
+    // do not read more than AMaxSize
+    // if AFixed = True, set position up to AMaxSize anyways
+    function ReadCString(AMaxSize: Integer; AFixed: Boolean = False): AnsiString;
     procedure ReadToBuffer(var ABuf; ASize: Integer);
   end;
 
@@ -716,17 +719,21 @@ begin
   end;
 end;
 
-function TRawDataReader.ReadCString(AMaxSize: Integer): AnsiString;
+function TRawDataReader.ReadCString(AMaxSize: Integer; AFixed: Boolean): AnsiString;
 var
   bt: Byte;
+  nPos: Integer;
 begin
   Result := '';
+  nPos := GetPosition();
   bt := ReadUInt8;
   while (bt <> 0) and (Length(Result) < AMaxSize) do
   begin
     Result := Result + Chr(bt);
     bt := ReadUInt8;
   end;
+  if AFixed then
+    SetPosition(nPos + AMaxSize);
 end;
 
 function TRawDataReader.ReadInt16: SmallInt;
