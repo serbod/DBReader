@@ -23,6 +23,7 @@ uses
   DBReaderSybase in 'DBReaderSybase.pas',
   DBReaderDbisam,
   DBReaderTps,
+  DBReaderRaima,
   Interfaces;
 
 //{$R *.res}

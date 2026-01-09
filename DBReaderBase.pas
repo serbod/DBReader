@@ -26,7 +26,7 @@ type
     TypeName: string;        // field type name
     FieldType: TFieldType;
     Size: Integer;
-    RawOffset: Cardinal;     // raw data offset (0..Length(RawData)-1)
+    RawOffset: Integer;     // raw data offset (0..Length(RawData)-1)
   end;
 
   TDbRowItem = class(TObject)
@@ -889,7 +889,7 @@ end;
 function TRawDataReader.GetPosition: Integer;
 begin
   // todo: native
-  Result := Integer(DataPtr) - Integer(StartPtr);
+  Result := PtrUInt(DataPtr) - PtrUInt(StartPtr);
 end;
 
 

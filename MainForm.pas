@@ -289,8 +289,8 @@ begin
           {$endif}
           // show as hex
           if FShowAsHex
-          and (TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint])
-          and (not VarIsNull(TmpRow.Values[ACol]))
+          //and (TmpField.FieldType in [ftInteger, ftSmallint, ftLargeint])
+          and VarIsOrdinal(TmpRow.Values[ACol])
           then
           begin
             TmpInt64 := TmpRow.Values[ACol];
@@ -881,6 +881,8 @@ begin
             iLen := TmpRow.RawOffs[FCurColIndex+1] - iOffs;
         end;
       end;
+      if iOffs < 0 then
+        iOffs := 0;
       FormRawValue.FieldName := TmpField.Name;
       FormRawValue.FieldTypeName := TmpField.TypeName;
       FormRawValue.IsBlob := TmpField.FieldType in [ftMemo, ftBlob, ftBytes, ftVarBytes];

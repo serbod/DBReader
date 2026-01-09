@@ -49,17 +49,17 @@ type
   end;
 
   TRdmFieldRec = record
-    Kind: Byte;        // u8  field kind ($75=unique  $6E=normal, $64=key)
+    Kind: Byte;        // u8  field kind ($75='u'nique  $6E='n'ormal, $64='d')
     DataType: Byte;    // u8  field data type
     Size: Word;        // u16 field data length
     Dimension: Word;   // u16 items count (for arrays and strings)
     Sub1: Word;        // u16
     Sub2: Word;        // u16
     ExtFileId: Word;   // u16 related file ID (for keys and blobs)
-    Sub4: Word;        // u16 unique (incremental) for each ExtFileId
+    ExtId: Word;       // u16 unique (incremental) for each ExtFileId
     Offset: Word;      // u16 offset
     TableId: Word;     // u16 table index
-    Flags: Word;       // u16 ($4=unsigned)
+    Flags: Word;       // u16 ($4=unsigned) $1=parent? $10=reference? $400=timetamp?
     //Sub6: Word;        // u8
     Name: string;      // $0A-terminated
   end;
@@ -78,7 +78,14 @@ type
     RelN1: Word;       // 2 0 or increment (for RelN2=1)
     RelN2: Word;       // 2 0 or 1
     Name: string;
+    // for references
+    PrimaryKeyId: Word; // 2 primary key FieldId
+    ForeignKeyId: Word; // 2 foreign key FieldId
+    RefFlags: Word;     // 2 flags
+    RefKind: Word;      // 2 = $61 'a'
   end;
+
+
 
 type
   { TRdmTableInfo }
@@ -167,6 +174,7 @@ const
   RDM_FIELD_TYPE_INTEGER      = $6C; // 'l' Long (4 byte) Int32
   RDM_FIELD_TYPE_SHORT        = $73; // 's' Short (2 byte) Int16
   // fiction
+  RDM_FIELD_TYPE_ROWID        = $23; // '#' RowID (8 byte)
   RDM_FIELD_TYPE_REL_OWNER    = $26; // '&' Relation owner (16 byte)
   RDM_FIELD_TYPE_REL_ITEM     = $40; // '@' Relation item (18 byte)
 
@@ -186,7 +194,7 @@ type
     RelOwnerCount: Word;     // 2 relations owner count
     RelItemsCount: Word;     // 2 relations items count
     Unknown_12: Word;        // 2
-    Unknown_14: Word;        // 2
+    ReferencesCount: Word;   // 2 references count
   end;
 
   // blob unit header (size = 18)
@@ -229,6 +237,7 @@ begin
     RDM_FIELD_TYPE_CHAR:      Result := ftString;
     RDM_FIELD_TYPE_INTEGER:   Result := ftInteger;
     RDM_FIELD_TYPE_SHORT:     Result := ftInteger;
+    RDM_FIELD_TYPE_ROWID:     Result := ftBlob;
     RDM_FIELD_TYPE_REL_OWNER: Result := ftBlob;
     RDM_FIELD_TYPE_REL_ITEM:  Result := ftBlob;
   else
@@ -242,8 +251,9 @@ begin
     RDM_FIELD_TYPE_FLOAT:     Result := 'FLOAT';
     RDM_FIELD_TYPE_BLOB:      Result := 'BLOB';
     RDM_FIELD_TYPE_CHAR:      Result := 'CHAR';
-    RDM_FIELD_TYPE_INTEGER:   Result := 'INT';
+    RDM_FIELD_TYPE_INTEGER:   Result := 'LONG';
     RDM_FIELD_TYPE_SHORT:     Result := 'SHORT';
+    RDM_FIELD_TYPE_ROWID:     Result := 'ROWID';
     RDM_FIELD_TYPE_REL_OWNER: Result := 'OWNER';
     RDM_FIELD_TYPE_REL_ITEM:  Result := 'RELATION';
   else
@@ -274,6 +284,13 @@ procedure TRdmTableInfo.AddFieldDef(AName: string; AType, ASize: Integer);
 var
   n: Integer;
 begin
+  n := Length(Fields);
+  SetLength(Fields, n+1);
+  Fields[n].Kind := $6E; // n-Normal
+  Fields[n].Name := AName;
+  Fields[n].DataType := AType;
+  Fields[n].Size := ASize;
+
   n := Length(FieldsDef);
   SetLength(FieldsDef, n+1);
   FieldsDef[n].Name := AName;
@@ -383,20 +400,20 @@ begin
     ALines.Add(Format('== Fields  Count=%d', [Length(Fields)]));
     for i := Low(Fields) to High(Fields) do
     begin
-      s := Format('%.2d Name=%-20s  Type=%s[%s] %-8s  Dim=%d  Size=%d  Offs=%d  Sub=%d %d  %d %d  %d',
+      s := Format('%.2d Name=%-20s  Type=%s[%s] %-8s  Dim=%d  Size=%d  Offs=%d  Sub=%d %d  ExtFile=%d ExtId=%d  Flag=$%x',
         [
           i,
           Fields[i].Name,
           Chr(Fields[i].DataType),
           Chr(Fields[i].Kind),
-          RdmFieldTypeName(Fields[i].DataType, Fields[i].Size),
+          RdmFieldTypeName(Fields[i].DataType, Fields[i].Dimension),
           Fields[i].Dimension,
           Fields[i].Size,
           Fields[i].Offset,
           Fields[i].Sub1,
           Fields[i].Sub2,
           Fields[i].ExtFileID,
-          Fields[i].Sub4,
+          Fields[i].ExtId,
           Fields[i].Flags
         ]);
       ALines.Add(s);
@@ -444,34 +461,34 @@ function TDBReaderRaima.ReadDataPage(var APageBuf: TByteDynArray;
   var APagePos: Int64; ATableInfo: TRdmTableInfo; AList: TDbRowsList): Boolean;
 var
   rdr: TRawDataReader;
-  RawData: TByteDynArray;
-  iPageID, iRowID, Unkn2, Unkn3: Cardinal;
-  i, iTabId, iRowPos, iTmpPos, iPageRecSize: Integer;
+  iRowID, iFileID: Cardinal;
+  i, ii, iTabId, iRowPos, iTmpPos, iPageRecCount, iPageRecSize: Integer;
   TabInfo: TRdmTableInfo;
   FieldType: Byte;
-  FieldSize: Integer;
+  FieldSize, FieldDim, FieldLen: Integer;
   TmpRow: TDbRowItem;
   v: Variant;
   s: string;
+  RawData: AnsiString;
 begin
   Result := False;
   rdr.Init(APageBuf[0], False);
-  RawData := [];
   TabInfo := ATableInfo;
 
   if APagePos = 0 then
   begin
     // first page
-    // 4  file ID ?
+    // 4  records count (non-deleted) ?
+    // 4  max records count (for this file size) ?
     // 4
-    // 4
-    // 4  records count
-    // records (4 byte)
+    // 4  total records count ?
+    // records (4 byte) free pages?
     Exit;
   end;
 
-  // 4  records count ?
-  iPageID := rdr.ReadUInt32;
+  // page header
+  // 4  records (on page) count ?
+  iPageRecCount := rdr.ReadInt32;
 
   iPageRecSize := ATableInfo.SlotSize;
 
@@ -479,15 +496,15 @@ begin
   begin
     iRowPos := rdr.GetPosition();
 
-    // records
+    // record header
     // 2 TableId
     // 2 FileId
-    // 2 ??  = 0
-    // 2 RecId ?
+    // 2 RowId high
+    // 2 RowId low
     iTabId := rdr.ReadUInt16;
-    Unkn2 := rdr.ReadUInt16;
-    Unkn3 := rdr.ReadUInt16;
-    iRowID := rdr.ReadUInt16;
+    iFileID := rdr.ReadUInt16;
+    iRowID := rdr.ReadUInt16 shl 16;
+    iRowID := iRowID or rdr.ReadUInt16;
 
     // skip records from other tables
     if iTabId <> ATableInfo.TableId then
@@ -515,18 +532,75 @@ begin
     begin
       FieldType := TabInfo.Fields[i].DataType;
       FieldSize := TabInfo.Fields[i].Size;
-      rdr.SetPosition(iRowPos + TabInfo.Fields[i].Offset);
+      FieldDim  := TabInfo.Fields[i].Dimension;
+      FieldLen  := FieldSize;
+      if (FieldDim > 0) and (FieldSize <> FieldDim) then
+        FieldLen := FieldSize div FieldDim;
+      if (FieldDim = 0) or (FieldDim = FieldSize) then
+        FieldDim := 1;
 
-      //iTmpPos := rdr.GetPosition();
+      if FieldType = RDM_FIELD_TYPE_ROWID then
+      begin
+        s := Format('%x.%x', [iFileID, iRowID]);
+        TmpRow.Values[i] := s;
+        Continue;
+      end;
+
+      rdr.SetPosition(iRowPos + TabInfo.Fields[i].Offset);
+      iTmpPos := rdr.GetPosition();
+
       v := Null;
       case FieldType of
-        RDM_FIELD_TYPE_FLOAT:
+        RDM_FIELD_TYPE_FLOAT,
+        RDM_FIELD_TYPE_INTEGER,
+        RDM_FIELD_TYPE_SHORT:
         begin
-          if FieldSize = 8 then
-            v := rdr.ReadDouble
-          else
-            v := rdr.ReadSingle;
+          // check for NULL
+          RawData := rdr.ReadBytes(FieldSize);
+          for ii := 1 to FieldSize do
+          begin
+            if RawData[ii] <> #$CC then
+              Break;
+            if ii = FieldSize then // if we are there, then all bytes $CC
+              FieldDim := 0;  // skip reading values, assign NULL by default
+          end;
+
+          rdr.SetPosition(iTmpPos);
+          s := '';
+          for ii := 0 to FieldDim-1 do
+          begin
+            case FieldType of
+              RDM_FIELD_TYPE_INTEGER:
+              begin
+                if (TabInfo.Fields[i].Flags and RDM_FIELD_FLAG_UNSIGNED) = 0 then
+                  v := rdr.ReadInt32
+                else
+                  v := rdr.ReadUInt32;
+              end;
+              RDM_FIELD_TYPE_SHORT:
+              begin
+                if (TabInfo.Fields[i].Flags and RDM_FIELD_FLAG_UNSIGNED) = 0 then
+                  v := rdr.ReadInt16
+                else
+                  v := rdr.ReadUInt16;
+              end;
+              RDM_FIELD_TYPE_FLOAT:
+              begin
+                if FieldLen = 8 then
+                  v := rdr.ReadDouble
+                else
+                  v := rdr.ReadSingle;
+              end;
+            end;
+
+            if s <> '' then
+              s := s + ',';
+            s := s + VarToStr(v);
+          end;
+          if FieldDim > 1 then
+            v := s;
         end;
+
         RDM_FIELD_TYPE_BLOB:
         begin
           s := rdr.ReadBytes(FieldSize);
@@ -537,6 +611,7 @@ begin
             v := s;
           end;
         end;
+
         RDM_FIELD_TYPE_CHAR:
         begin
           //s := rdr.ReadBytes(FieldSize);
@@ -545,19 +620,52 @@ begin
           s := WinCPToUTF8(s);
           v := s;
         end;
-        RDM_FIELD_TYPE_INTEGER:
+
+        RDM_FIELD_TYPE_REL_OWNER:  // 16 byte
         begin
-          if (TabInfo.Fields[i].Flags and RDM_FIELD_FLAG_UNSIGNED) = 0 then
-            v := rdr.ReadInt32
-          else
-            v := rdr.ReadUInt32;
+          //s := rdr.ReadBytes(FieldSize);
+          //v := BufferToHex(s[1], FieldSize);
+          // 4 FileID
+          // 6 FileID,RowID  addr of first item
+          // 6 FileID,RowID  addr of last item
+          iFileID := rdr.ReadUInt32;
+          s := Format('?=%x', [iFileID]);
+
+          iFileID := rdr.ReadUInt16;
+          iRowID := rdr.ReadUInt16 shl 16;
+          iRowID := iRowID or rdr.ReadUInt16;
+          s := Format('%s First=%x.%x', [s, iFileID, iRowID]);
+
+          iFileID := rdr.ReadUInt16;
+          iRowID := rdr.ReadUInt16 shl 16;
+          iRowID := iRowID or rdr.ReadUInt16;
+          s := Format('%s Last=%x.%x', [s, iFileID, iRowID]);
+          v := s;
         end;
-        RDM_FIELD_TYPE_SHORT:
+
+        RDM_FIELD_TYPE_REL_ITEM: // Relation item (18 byte)
         begin
-          if (TabInfo.Fields[i].Flags and RDM_FIELD_FLAG_UNSIGNED) = 0 then
-            v := rdr.ReadInt16
-          else
-            v := rdr.ReadUInt16;
+          //s := rdr.ReadBytes(FieldSize);
+          //v := BufferToHex(s[1], FieldSize);
+          // 6 FileID,RowID  addr of owner
+          // 6 FileID,RowID  addr of next item
+          // 6 FileID,RowID  addr of prev item
+
+          iFileID := rdr.ReadUInt16;
+          iRowID := rdr.ReadUInt16 shl 16;
+          iRowID := iRowID or rdr.ReadUInt16;
+          s := Format('Owner=%x.%x', [iFileID, iRowID]);
+
+          iFileID := rdr.ReadUInt16;
+          iRowID := rdr.ReadUInt16 shl 16;
+          iRowID := iRowID or rdr.ReadUInt16;
+          s := Format('%s Next=%x.%x', [s, iFileID, iRowID]);
+
+          iFileID := rdr.ReadUInt16;
+          iRowID := rdr.ReadUInt16 shl 16;
+          iRowID := iRowID or rdr.ReadUInt16;
+          s := Format('%s Prev=%x.%x', [s, iFileID, iRowID]);
+          v := s;
         end;
       else
         s := rdr.ReadBytes(FieldSize);
@@ -613,6 +721,7 @@ begin
     Exit;
   end;
 
+  sData := '';
   while nPos + FBlobUnitSize < FBlobStream.Size do
   begin
     FBlobStream.Position := nPos;
@@ -684,7 +793,7 @@ begin
   FileHeader.RelOwnerCount := rdr.ReadUInt16;   // 2 relations owner count
   FileHeader.RelItemsCount := rdr.ReadUInt16;   // 2 relations items count
   FileHeader.Unknown_12 := rdr.ReadUInt16;   // 2
-  FileHeader.Unknown_14 := rdr.ReadUInt16;   // 2
+  FileHeader.ReferencesCount := rdr.ReadUInt16; // 2 references count
 
   // read files records
   SetLength(FilesArr, FileHeader.FilesCount);
@@ -727,7 +836,7 @@ begin
     FieldsArr[i].Sub1 := rdr.ReadUInt16;       // u16
     FieldsArr[i].Sub2 := rdr.ReadUInt16;       // u16
     FieldsArr[i].ExtFileId := rdr.ReadUInt16;  // u16
-    FieldsArr[i].Sub4 := rdr.ReadUInt16;       // u16
+    FieldsArr[i].ExtId := rdr.ReadUInt16;      // u16
     FieldsArr[i].Offset := rdr.ReadUInt16;     // u16 offset
     FieldsArr[i].TableId := rdr.ReadUInt16;    // u16 table index
     FieldsArr[i].Flags := rdr.ReadUInt16;      // u16 flags
@@ -738,6 +847,7 @@ begin
   SetLength(RelationArr, FileHeader.RelOwnerCount);
   for i := 0 to FileHeader.RelOwnerCount-1 do
   begin
+    Initialize(RelationArr[i]);
     RelationArr[i].Kind       := rdr.ReadUInt16; // 2
     RelationArr[i].TableId    := rdr.ReadUInt16; // 2
     RelationArr[i].Offset     := rdr.ReadUInt16; // 2
@@ -747,6 +857,8 @@ begin
   end;
 
   // relation items (8 bytes)
+  if FileHeader.RelItemsCount > Length(RelationArr) then
+    SetLength(RelationArr, FileHeader.RelItemsCount);
   for i := 0 to FileHeader.RelItemsCount-1 do
   begin
     RelationArr[i].RelTabId   := rdr.ReadUInt16; // 2
@@ -763,14 +875,15 @@ begin
   end;
 
   // references (8 bytes) records
-  for i := 0 to FileHeader.Unknown_14-1 do
+  iPos := Length(RelationArr);
+  SetLength(RelationArr, iPos + FileHeader.ReferencesCount);
+  for i := 0 to FileHeader.ReferencesCount-1 do
   begin
-    // 2 primary key FieldId
-    // 2 foreign key FieldId
-    // 2 flags
-    // 2 = $61 'a'
-    s := rdr.ReadBytes(8);
-    LogInfo(Format('Reference[%2d]: %s',[i, BufferToHex(s[1], Length(s))]));
+    Initialize(RelationArr[iPos + i]);
+    RelationArr[iPos + i].PrimaryKeyId := rdr.ReadUInt16; // 2 primary key FieldId
+    RelationArr[iPos + i].ForeignKeyId := rdr.ReadUInt16; // 2 foreign key FieldId
+    RelationArr[iPos + i].RefFlags := rdr.ReadUInt16;     // 2 flags
+    RelationArr[iPos + i].RefKind := rdr.ReadUInt16;      // 2 = $61 'a'
   end;
 
   // read tables names ($0A-terminated)
@@ -855,6 +968,36 @@ begin
   // add relations to tables
   for i := Low(RelationArr) to High(RelationArr) do
   begin
+    // references
+    if RelationArr[i].Kind = 0 then
+    begin
+      // primary key
+      iField := RelationArr[i].PrimaryKeyId;
+      s := '';
+      if iField < Length(FieldsArr) then
+      begin
+        RelationArr[i].TableId := FieldsArr[iField].TableId;
+        RelationArr[i].Offset := FieldsArr[iField].Offset;
+        TmpTable := FTablesList.GetByTableID(FieldsArr[iField].TableId);
+        if Assigned(TmpTable) then
+          s := s + TmpTable.TableName;
+        s := s + '.' + FieldsArr[iField].Name;
+      end;
+      // foreign key
+      s := s + ' <- ';
+      iField := RelationArr[i].ForeignKeyId;
+      if iField < Length(FieldsArr) then
+      begin
+        RelationArr[i].RelTabId := FieldsArr[iField].TableId;
+        RelationArr[i].RelTabOffs := FieldsArr[iField].Offset;
+        TmpTable := FTablesList.GetByTableID(FieldsArr[iField].TableId);
+        if Assigned(TmpTable) then
+          s := s + TmpTable.TableName;
+        s := s + '.' + FieldsArr[iField].Name;
+      end;
+      RelationArr[i].Name := s;
+      Continue;
+    end;
     // relation owner
     TmpTable := FTablesList.GetByTableID(RelationArr[i].TableId);
     if Assigned(TmpTable) then
@@ -888,6 +1031,11 @@ begin
   for i := 0 to FTablesList.Count-1 do
   begin
     TmpTable := FTablesList.GetItem(i);
+    // records debug
+    if IsDebugRows then
+    begin
+      TmpTable.AddFieldDef('#RowID', RDM_FIELD_TYPE_ROWID, 8);
+    end;
     SetLength(TmpTable.FieldsDef, Length(TmpTable.Fields));
     for ii := 0 to Length(TmpTable.Fields)-1 do
     begin
@@ -897,6 +1045,8 @@ begin
       TmpTable.FieldsDef[ii].TypeName := RdmFieldTypeName(TmpTable.Fields[ii].DataType, TmpTable.Fields[ii].Size);
       TmpTable.FieldsDef[ii].Size := TmpTable.Fields[ii].Size;
       TmpTable.FieldsDef[ii].RawOffset := TmpTable.Fields[ii].Offset;
+      if TmpTable.Fields[ii].DataType = RDM_FIELD_TYPE_ROWID then
+        TmpTable.FieldsDef[ii].RawOffset := -1;  // if offset=0 it will be calculated from previous fields size
     end;
   end;
 
@@ -967,7 +1117,7 @@ begin
   TmpTable.AddFieldDef('Sub1', RDM_FIELD_TYPE_SHORT, 2);
   TmpTable.AddFieldDef('Sub2', RDM_FIELD_TYPE_SHORT, 2);
   TmpTable.AddFieldDef('ExtFileId', RDM_FIELD_TYPE_SHORT, 2);
-  TmpTable.AddFieldDef('Sub4', RDM_FIELD_TYPE_SHORT, 2);
+  TmpTable.AddFieldDef('ExtId', RDM_FIELD_TYPE_SHORT, 2);
   TmpTable.AddFieldDef('Offset', RDM_FIELD_TYPE_SHORT, 2);
   TmpTable.AddFieldDef('TableId', RDM_FIELD_TYPE_SHORT, 2);
   TmpTable.AddFieldDef('Flags', RDM_FIELD_TYPE_SHORT, 2);
@@ -985,7 +1135,7 @@ begin
     TmpRow.Values[6] := FieldsArr[i].Sub1;
     TmpRow.Values[7] := FieldsArr[i].Sub2;
     TmpRow.Values[8] := FieldsArr[i].ExtFileId;
-    TmpRow.Values[9] := FieldsArr[i].Sub4;
+    TmpRow.Values[9] := FieldsArr[i].ExtId;
     TmpRow.Values[10] := FieldsArr[i].Offset;
     TmpRow.Values[11] := FieldsArr[i].TableId;
     TmpRow.Values[12] := FieldsArr[i].Flags;
@@ -1007,6 +1157,12 @@ begin
   TmpTable.AddFieldDef('RelTabOffs', RDM_FIELD_TYPE_SHORT, 2);
   TmpTable.AddFieldDef('RelN1', RDM_FIELD_TYPE_SHORT, 2);
   TmpTable.AddFieldDef('RelN2', RDM_FIELD_TYPE_SHORT, 2);
+  // references
+  TmpTable.AddFieldDef('PrimaryKeyId', RDM_FIELD_TYPE_SHORT, 2);
+  TmpTable.AddFieldDef('ForeignKeyId', RDM_FIELD_TYPE_SHORT, 2);
+  TmpTable.AddFieldDef('RefFlags', RDM_FIELD_TYPE_SHORT, 2);
+  TmpTable.AddFieldDef('RefKind', RDM_FIELD_TYPE_SHORT, 2);
+
   for i := Low(RelationArr) to High(RelationArr) do
   begin
     TmpRow := TDbRowItem.Create(TmpTable);
@@ -1024,6 +1180,11 @@ begin
     TmpRow.Values[9] := RelationArr[i].RelTabOffs;
     TmpRow.Values[10] := RelationArr[i].RelN1;
     TmpRow.Values[11] := RelationArr[i].RelN2;
+    // references
+    TmpRow.Values[12] := RelationArr[i].PrimaryKeyId;
+    TmpRow.Values[13] := RelationArr[i].ForeignKeyId;
+    TmpRow.Values[14] := RelationArr[i].RefFlags;
+    TmpRow.Values[15] := RelationArr[i].RefKind;
   end;
 
   FIsMetadataLoaded := True;
