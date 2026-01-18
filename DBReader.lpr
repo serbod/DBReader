@@ -24,6 +24,7 @@ uses
   DBReaderDbisam,
   DBReaderTps,
   DBReaderRaima,
+  DBReader1S,
   Interfaces;
 
 //{$R *.res}

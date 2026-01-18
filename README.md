@@ -18,6 +18,7 @@ Supported databases:
 * ElevateDB/DBISAM (.DAT)
 * Clarion/TopSpeed (.TPS, .DAT)
 * RaimaDB/db_VISTA/Velocis/RDM (.DBD)
+* 1S-Enterprise 8.x (.1CD)
 
 Sample projects:
 * Database browser - browse tables and inspect values

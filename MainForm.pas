@@ -24,7 +24,7 @@ uses
   DBReaderBase, DBReaderFirebird, DBReaderBerkley, DBReaderMidas, DBReaderParadox,
   DBReaderDbf, FSReaderMtf, DBReaderMdf, DBReaderMdb, DBReaderEdb, DBReaderInno,
   DBReaderSqlite, DBReaderSybase, DBReaderDbisam, DBReaderTps, DBReaderRaima,
-  DBReaderClarion,
+  DBReaderClarion, DBReader1S,
   {$ifdef ENABLE_GSR}DBReaderGsr,{$endif}
   FSReaderBase, FSReaderPst;
 
@@ -692,7 +692,10 @@ begin
       OpenDatabase(FDbFileName, TDBReaderTps)
     else
     if (sExt = '.dbd') then
-      OpenDatabase(FDbFileName, TDBReaderRaima);
+      OpenDatabase(FDbFileName, TDBReaderRaima)
+    else
+    if (sExt = '.1cd') then
+      OpenDatabase(FDbFileName, TDBReaderIS);
 
   finally
     memoLog.Lines.EndUpdate();
